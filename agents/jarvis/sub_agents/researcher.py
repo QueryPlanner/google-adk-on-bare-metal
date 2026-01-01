@@ -5,11 +5,11 @@ from google.adk.models.lite_llm import LiteLlm
 def researcher_agent() -> Agent:
     # Shared model config (could be different for this agent)
     api_base_url = "https://openrouter.ai/api/v1"
-    model = LiteLlm(
+    model=LiteLlm(
         model="openrouter/openai/gpt-oss-20b",
         api_base=api_base_url,
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-    )
+        api_key=os.environ["OPENROUTER_API_KEY"],
+    ),
 
     return Agent(
         model=model,

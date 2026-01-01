@@ -3,8 +3,8 @@ from google.adk.agents.llm_agent import Agent
 from google.adk.models.lite_llm import LiteLlm
 
 # Import tools and sub-agents
-from agents.jarvis.tools.calculator import add_tool, multiply_tool
-from agents.jarvis.sub_agents.researcher import researcher_agent
+from .tools.calculator import add_tool, multiply_tool
+from .sub_agents.researcher import researcher_agent
 
 api_base_url = "https://openrouter.ai/api/v1"
 
@@ -12,7 +12,7 @@ root_agent = Agent(
     model=LiteLlm(
         model="openrouter/deepseek/deepseek-v3.2",
         api_base=api_base_url,
-        api_key=os.getenv("OPENROUTER_API_KEY"),
+        api_key=os.environ["OPENROUTER_API_KEY"],
     ),
     name="root_agent",
     description="A helpful assistant for user questions.",

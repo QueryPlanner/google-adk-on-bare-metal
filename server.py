@@ -34,7 +34,7 @@ def create_app() -> FastAPI:
   repo_root = Path(__file__).resolve().parent
   
   # Check for .env in root
-  load_standard_env_files(repo_root=repo_root, agent_dir=repo_root)
+  load_standard_env_files(repo_root=repo_root, agent_dir=Path("."))
 
   session_service_uri = to_asyncpg_sqlalchemy_url(require_env("DATABASE_URL"))
 
