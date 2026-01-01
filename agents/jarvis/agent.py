@@ -5,8 +5,24 @@ from google.adk.models.lite_llm import LiteLlm
 # Import tools and sub-agents
 from .tools.calculator import add_tool, multiply_tool
 from .sub_agents.researcher import researcher_agent
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, SseConnectionParams
 
 api_base_url = "https://openrouter.ai/api/v1"
+
+# Setup GitHub MCP
+github_token = os.getenv("GITHUB_TOKEN")
+github_mcp_tools = []
+if github_token:
+    github_mcp_tools = [
+        McpToolset(
+            connection_params=SseConnectionParams(
+                url="https://api.githubcopilot.com/mcp/",
+                headers={"Authorization": f"Bearer {github_token}"}
+            )
+        )
+    ]
+else:
+    print("Warning: GITHUB_TOKEN not found. GitHub MCP tools will not be available.")
 
 root_agent = Agent(
     model=LiteLlm(
@@ -24,5 +40,5 @@ root_agent = Agent(
     # Register the sub-agent structurally
     sub_agents=[researcher_agent()],
     # Give the agent tools to do its job (including transferring)
-    tools=[add_tool, multiply_tool],
+    tools=[add_tool, multiply_tool] + github_mcp_tools,
 )
