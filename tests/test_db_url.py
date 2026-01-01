@@ -1,4 +1,4 @@
-from jarvis.utils.db_url import to_asyncpg_sqlalchemy_url
+from platform_utils.db_url import to_asyncpg_sqlalchemy_url
 
 
 def test_to_asyncpg_sqlalchemy_url_converts_scheme() -> None:

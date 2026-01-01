@@ -1,0 +1,29 @@
+[Unit]
+Description=ADK Agent Platform
+After=network.target
+
+[Service]
+# User running the application
+User=ubuntu
+Group=ubuntu
+
+# Directory where the code is cloned
+WorkingDirectory=/home/ubuntu/open-services-agent-starter-pack
+
+# Environment variables
+# Option A: Load from file (Recommended)
+EnvironmentFile=/home/ubuntu/open-services-agent-starter-pack/.env
+# Option B: Set explicitly
+# Environment="DATABASE_URL=postgresql://..."
+# Environment="OPENROUTER_API_KEY=sk-..."
+
+# Path to 'uv' or 'python' executable
+# Assuming 'uv sync' has been run, we use the virtualenv python
+ExecStart=/home/ubuntu/open-services-agent-starter-pack/.venv/bin/python -m server
+
+# Restart settings
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

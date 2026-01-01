@@ -8,15 +8,15 @@
 
 ### Repo layout
 
-- `agents/jarvis/agent.py`: ADK Dev UI entrypoint (shim that re-exports `jarvis.agent.root_agent`)
-- `jarvis/agent.py`: defines `root_agent` only (no DB wiring)
-- `jarvis/server.py`: local FastAPI entrypoint that runs ADK Web using Postgres sessions
-- `jarvis/utils/`: small helper modules (env + db url normalization)
+- `server.py`: Main platform entrypoint (FastAPI + ADK + Postgres)
+- `agents/<name>/agent.py`: Agent definition (exports `root_agent`)
+- `platform_utils/`: Shared helper modules (env + db url normalization)
 - `tests/`: unit tests
+- `.env`: Configuration file (API keys, DB URL)
 
 ### Environment variables
 
-Create `jarvis/.env`:
+Create `.env` in the project root:
 
 - `OPENROUTER_API_KEY`: OpenRouter API key (required by the agent model)
 - `DATABASE_URL`: Postgres URL for sessions (required by the server)
@@ -25,7 +25,7 @@ Optional:
 
 - `HOST`: server bind host (default: `127.0.0.1`)
 - `PORT`: server port (default: `8000`)
-- `AGENTS_DIR`: directory containing agent folders (default: repo root)
+- `AGENTS_DIR`: directory containing agent folders (default: `./agents`)
 
 ### Install
 
@@ -42,13 +42,6 @@ uv sync --extra dev
 ### Run the server
 
 ```bash
-uv run python -m jarvis.server
-```
-
-If you're already inside the `jarvis/` directory, this also works:
-
-```bash
-cd jarvis
 uv run python -m server
 ```
 

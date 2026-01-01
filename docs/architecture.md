@@ -10,15 +10,16 @@ Google ADK is useful even without Google Cloud:
 
 ### Key choices
 
-- **Entry point**: `python -m jarvis.server`
+- **Entry point**: `python -m server`
   - Wraps `google.adk.cli.fast_api.get_fast_api_app(...)`
   - Forces a Postgres-backed session store via `DATABASE_URL`
 - **Agents directory**: `./agents`
   - ADK Dev UI lists *directories* under `agents_dir`, so we keep a dedicated
     folder with only real agent apps (to avoid listing `docs/`, `tests/`, etc).
-- **Agent module**: `jarvis/agent.py`
-  - Contains only `root_agent` to keep ADK discovery simple and avoid side effects
-- **DB URL normalization**: `jarvis/utils/db_url.py`
+- **Agent module**: `agents/<name>/agent.py`
+  - Contains `root_agent` to keep ADK discovery simple.
+  - Sub-agents are instantiated via factory functions to ensure clean state on reload.
+- **DB URL normalization**: `platform_utils/db_url.py`
   - Converts libpq-style parameters (e.g. `sslmode=require`) to asyncpg-compatible ones
 
 ### What ADK uses the database for

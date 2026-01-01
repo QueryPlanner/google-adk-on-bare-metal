@@ -1,19 +1,14 @@
-## google-adk (without GCP)
+## Open Services Agent Starter Pack
 
-This repo shows how to use **Google ADK (Agent Development Kit)** locally without
-Google Cloud Platform:
+This repo is a **production-ready template** for building and deploying AI agents on your own infrastructure using **Google ADK**, **LiteLLM**, and **Postgres**.
 
-- **LLM provider**: OpenRouter via `LiteLlm` (open-source-friendly routing layer)
-- **Session persistence**: Postgres (e.g. Neon) via ADK’s `DatabaseSessionService`
-- **ADK Dev UI**: served locally via a small FastAPI wrapper (`jarvis/server.py`)
+**Key Features:**
+- 🐳 **Self-Hosted Ready**: Docker & Compose setup included. No GCP lock-in.
+- 🧩 **Extensible**: Structured for adding Tools and Sub-Agents easily.
+- 💾 **Persistent**: Postgres-backed sessions out of the box.
+- 🚀 **Modern Stack**: Python 3.11, `uv`, `fastapi`, `asyncpg`.
 
-The key idea is that ADK is an **agent framework**: you can use it without Vertex AI /
-Agent Engine as long as you provide:
-
-- a model backend (here: OpenRouter)
-- a session store (here: Postgres)
-
-## Quickstart
+## Quickstart (Local Dev)
 
 ### Prerequisites
 
@@ -24,7 +19,7 @@ Agent Engine as long as you provide:
 
 ### 1) Configure env
 
-Create `jarvis/.env`:
+Create `.env`:
 
 - **`OPENROUTER_API_KEY`**: your OpenRouter key
 - **`DATABASE_URL`**: a Postgres URL (can be the standard `postgresql://...` form)
@@ -39,26 +34,34 @@ Notes:
 uv sync
 ```
 
-### 3) Run ADK Web locally (but backed by Postgres)
+### 3) Run the Agent Platform
 
 ```bash
-uv run python -m jarvis.server
+uv run python -m server
 ```
 
 Then open `http://127.0.0.1:8000`.
 
-Notes:
-- The Dev UI lists apps by scanning directories under `AGENTS_DIR`.
-  By default this repo points ADK at `./agents`, which contains only `jarvis`,
-  so you don't have to manually select it each run.
+## Deployment (Docker)
+
+For production or clean local environments, use Docker.
+
+👉 **[Read the Deployment Guide](DEPLOYMENT.md)**
+
+## Customization
+
+- **Add an Agent**: Create a new folder in `agents/` with an `agent.py` defining `root_agent`.
+- **Tools**: Add functions to `agents/<your_agent>/tools/`
+- **Main Logic**: Edit `agents/<your_agent>/agent.py`
 
 ## Why not `adk web --session_service_uri ...`?
 
 ADK’s CLI defaults to local SQLite session storage unless you pass
-`--session_service_uri`. This repo provides `jarvis/server.py` so:
+`--session_service_uri`. This repo provides a custom `server.py` so:
 
 - you don’t have to remember a long CLI command
 - sessions always go to Postgres (once `DATABASE_URL` is set)
+- multiple agents in `agents/` are served automatically.
 
 ## Development
 

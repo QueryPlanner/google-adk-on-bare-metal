@@ -1,0 +1,19 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      # DATABASE_URL and API Keys will be loaded from the .env file
+    env_file:
+      - .env
+    # Volumes are for hot-reloading during development.
+    # For production, remove these volumes to use the immutable code from the image.
+    volumes:
+      - ./agents:/app/agents
+      - ./platform_utils:/app/platform_utils
+      - ./server.py:/app/server.py
+    # restart: always # Uncomment for production to auto-restart
+    command: python -m server
