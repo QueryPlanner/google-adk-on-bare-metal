@@ -14,11 +14,12 @@ This document explains our multi-stage Docker build strategy and why we chose th
 
 Our Dockerfile uses a **multi-stage build** with the following architecture:
 
-1. **Builder Stage**: `python:3.13-slim` + uv binary (copied from Astral's distroless image)
+1. **Builder Stage**: `python:3.13-slim` + uv (installed via pip for maximum reliability)
 2. **Runtime Stage**: Clean `python:3.13-slim` + only the virtual environment
 
 This approach gives us:
-- ✅ Official uv binary (always latest)
+- ✅ Official uv binary
+- ✅ Maximum reliability (pulls from PyPI, avoids GHCR auth issues on some servers)
 - ✅ Full build capabilities (shell, Python, package manager)
 - ✅ Minimal runtime image (~200MB vs ~500MB)
 - ✅ Fast rebuilds (5-10s for code changes)
@@ -46,24 +47,20 @@ FROM python:3.13-slim AS builder
 - Python runtime for `uv sync` to work
 - Shell and basic utilities (cp, mkdir, etc.) for build commands
 
-**Why not `ghcr.io/astral-sh/uv:latest` as base?**
-- Astral's uv image is **distroless** (no shell, no package manager)
-- You can't run `RUN` commands in distroless images
-- It's designed to copy the binary FROM, not build FROM
-
 ---
 
-### Copy UV Binary
+### Install UV
 ```dockerfile
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN pip install uv==0.9.26
 ```
-**What:** Extract just the `uv` and `uvx` binaries from Astral's image
+**What:** Install the official `uv` package manager via pip.
 **Why:**
-- Gets latest uv version without manually tracking releases
-- Copies only ~10MB of binaries (not a whole base image)
-- Puts them in `/bin/` so they're in PATH
+- Avoids dependency on GitHub Container Registry (GHCR) during build, which can have authentication issues on some servers.
+- Still gets the official, high-performance `uv` binary.
+- PyPI is generally more accessible than GHCR in diverse environments.
 
-**Key insight:** We get official uv without the distroless constraints.
+**Why not `ghcr.io/astral-sh/uv`?**
+While `COPY --from=ghcr.io/astral-sh/uv` is a popular pattern, it requires the build environment to have valid (even if anonymous) access to GHCR. Some environments or Docker configurations can fail with "denied" even for public images. `pip install uv` is a more robust alternative for a generic template.
 
 ---
 
@@ -378,11 +375,11 @@ COPY src ./src  # Works, but then what?
 - Image is ~100MB but you can't build anything with it
 - Designed for copying FROM, not building FROM
 
-### ✅ Our Approach (Multi-Stage)
+### ✅ Our Approach (pip install)
 ```dockerfile
-# Builder: Use python:3.13-slim + uv binary
+# Builder: Use python:3.13-slim + uv via pip
 FROM python:3.13-slim AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
+RUN pip install uv
 # ... build with full shell/utilities ...
 
 # Runtime: Clean python:3.13-slim + only .venv
@@ -393,7 +390,7 @@ COPY --from=builder /app/.venv /app/.venv
 **Benefits:**
 - Builder has shell + Python + uv → can build anything
 - Runtime is minimal → small image size
-- Gets official uv binary → always latest
+- Avoids GHCR auth issues (uses PyPI)
 - Best of both worlds
 
 ---
@@ -458,7 +455,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 | Approach | Builder Size | Runtime Size | Rebuild Time (code change) | Simplicity | Notes |
 |----------|--------------|--------------|----------------------------|------------|-------|
 | Single-stage | 500MB | 500MB | 2-5 minutes | ✅ Simple | No separation, slow rebuilds |
-| **Multi-stage + COPY (ours)** | **~500MB** | **~200MB** | **5-10 seconds** | **✅ Simple** | **Best balance of performance and clarity** |
+| **Multi-stage + pip install (ours)** | **~500MB** | **~200MB** | **5-10 seconds** | **✅ Simple** | **Best balance of performance and clarity** |
 | Multi-stage + bind mounts | ~480MB | ~200MB | 5-10 seconds | ❌ Complex | Marginal savings, complex caching |
 | UV distroless base | Won't work | N/A | N/A | N/A | No shell for build commands |
 
@@ -468,10 +465,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 ## Summary
 
-**Why our multi-stage COPY approach?**
+**Why our multi-stage pip install approach?**
 
 1. **We can't use distroless uv image as base** → no shell to run build commands
-2. **We still want official uv binary** → copy it from distroless image into python:slim
+2. **We want maximum reliability** → `pip install uv` avoids GHCR auth hurdles
 3. **We separate build from runtime** → smaller final image, faster rebuilds
 4. **Layer caching optimization** → dependencies cached separately from code
 5. **Simple COPY over bind mounts** → explicit, reliable, maintainable
@@ -480,7 +477,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 | Component | Approach | Why |
 |-----------|----------|-----|
-| `uv` binary | Copy from distroless | Get official binary without distroless constraints |
+| `uv` binary | `pip install uv` | Avoid GHCR auth issues, get official binary from PyPI |
 | Base image | `python:3.13-slim` | Need shell + Python for build, minimal for runtime |
 | Build pattern | Multi-stage | 50% size reduction (discard build tools) |
 | Dependency caching | Cache mount | Persist packages across builds (~80% speedup) |

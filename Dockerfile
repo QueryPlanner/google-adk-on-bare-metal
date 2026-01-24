@@ -5,8 +5,8 @@
 # ============================================================================
 FROM python:3.13-slim AS builder
 
-# Install uv from official distroless image
-COPY --from=ghcr.io/astral-sh/uv:0.9.6 /uv /uvx /bin/
+# Install uv
+RUN pip install uv==0.9.26
 
 # Set working directory
 WORKDIR /app
