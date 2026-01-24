@@ -5,7 +5,7 @@ You can deploy this Agent Platform using **Docker** (easiest compatibility) or *
 ## Prerequisites (Both Methods)
 
 1.  **Managed Postgres Database**: You need a connection string (e.g., from Neon, AWS RDS, Supabase).
-2.  **OpenRouter API Key**.
+2.  **OpenRouter or Google API Key**.
 3.  **Server**: A Linux server (Ubuntu/Debian recommended).
 
 ---
@@ -43,8 +43,11 @@ Best for small servers (e.g., 512MB RAM) since you avoid Docker overhead.
 ```bash
 sudo apt update
 sudo apt install -y python3-venv git
+# Ensure Python 3.13+ is installed (e.g., via deadsnakes PPA on Ubuntu)
+# sudo add-apt-repository ppa:deadsnakes/ppa
+# sudo apt install python3.13 python3.13-venv
+
 # Install uv (fast python package manager)
-# Note: Inspect the script before running if you have security concerns.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.cargo/env
 ```

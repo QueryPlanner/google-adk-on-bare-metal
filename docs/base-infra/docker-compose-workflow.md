@@ -170,39 +170,6 @@ PORT=8001
 
 ---
 
-## Testing Registry Images Locally
-
-Test the exact container image built by CI/CD without rebuilding locally.
-
-**One-time setup:**
-```bash
-# Authenticate to your container registry
-# For GCP Artifact Registry:
-gcloud auth configure-docker <registry-location>-docker.pkg.dev
-
-# For other registries:
-# AWS ECR: aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
-# Docker Hub: docker login
-```
-
-**Pull and run:**
-```bash
-# Set your full image name
-export REGISTRY_IMAGE="<location>-docker.pkg.dev/<project-id>/<repository>/<image-name>:latest"
-
-# Pull the image (explicit pull required for multi-platform image behavior with docker-compose)
-docker pull $REGISTRY_IMAGE
-
-# Run the image using docker-compose with registry override
-docker compose -f docker-compose.yml -f docker-compose.registry.yml up
-```
-
-This tests the exact artifact from your CI/CD pipeline. The container runs with a `-registry` suffix (e.g., `app-registry`) to make it easy to distinguish registry-pulled images from those locally-built.
-
-**Note on multi-platform images:** The `docker images` command displays [manifest list](https://docs.docker.com/reference/cli/docker/manifest/) metadata rather than platform-specific image metadata for multi-platform images pulled from registries. You may see an epoch timestamp (1970-01-01) and manifest size (~43MB) instead of the actual image details. This is expected Docker behavior - the real platform-specific image (~171MB) is fully pulled and functional. Use `docker inspect <image>` to view actual image metadata, or simply run the container to verify it works correctly.
-
----
-
 ## Direct Docker Commands (Without Compose)
 
 If you need to build and run without docker-compose:
