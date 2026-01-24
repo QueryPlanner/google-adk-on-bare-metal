@@ -14,9 +14,10 @@ You can deploy this Agent Platform using **Docker** (easiest compatibility) or *
 ## CI/CD with GitHub Actions
 
 This repository includes a GitHub Actions workflow that automatically:
-1.  **Builds** a multi-stage Docker image on every push.
-2.  **Caches** build layers using GitHub Actions cache (`type=gha`) for ultra-fast rebuilds.
-3.  **Pushes** the image to **GitHub Container Registry (GHCR)**.
+1.  **Builds** a multi-platform Docker image (**AMD64 & ARM64**) on every push.
+2.  **Validates** code quality via `ruff`, `mypy`, and `pytest` before building.
+3.  **Caches** build layers using GitHub Actions cache (`type=gha`) for ultra-fast rebuilds.
+4.  **Pushes** the image to **GitHub Container Registry (GHCR)**.
 
 ### Using GHCR Images
 
