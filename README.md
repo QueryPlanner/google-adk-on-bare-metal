@@ -48,7 +48,7 @@ Then open `http://127.0.0.1:8000`.
 
 For production or clean local environments, use Docker.
 
-👉 **[Read the Deployment Guide](DEPLOYMENT.md)**
+👉 **[Read the Deployment Guide](docs/DEPLOYMENT.md)**
 
 ## Customization
 
