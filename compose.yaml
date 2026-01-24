@@ -1,6 +1,6 @@
 services:
   agent:
-    image: ghcr.io/queryplanner/google-adk-wo-gcp:main
+    image: ghcr.io/queryplanner/google-adk-on-bare-metal:main
     build: .
     ports:
       - "8080:8080"
