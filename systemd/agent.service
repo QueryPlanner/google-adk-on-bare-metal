@@ -16,10 +16,11 @@ EnvironmentFile=/home/ubuntu/google-adk-on-bare-metal/.env
 # Option B: Set explicitly
 # Environment="DATABASE_URL=postgresql://..."
 # Environment="OPENROUTER_API_KEY=sk-..."
+# Environment="AGENT_NAME=my-agent"
 
 # Path to 'uv' or 'python' executable
 # Assuming 'uv sync' has been run, we use the virtualenv python
-ExecStart=/home/ubuntu/google-adk-on-bare-metal/.venv/bin/python -m server
+ExecStart=/home/ubuntu/google-adk-on-bare-metal/.venv/bin/python -m agent_foundation.server
 
 # Restart settings
 Restart=always

@@ -1,52 +1,122 @@
 [project]
 name = "google-adk-on-bare-metal"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.8.0"
+description = "Production-ready template for building and deploying AI agents using Google ADK, LiteLLM, and Postgres on self-hosted infrastructure"
 readme = "README.md"
-requires-python = ">=3.11"
+authors = [
+    { name = "queryplanner", email = "queryplanner@users.noreply.github.com" }
+]
+requires-python = ">=3.13,<3.14"
 dependencies = [
-    "google-adk>=1.21.0",
-    "litellm>=1.80.5",
+    # Pin ADK to test releases before locking upgrades
+    "google-adk==1.21.0",
+    "google-auth>=2.40.3,<3.0.0",
+    "google-cloud-logging>=3.12.1,<4.0.0",
+    "opentelemetry-exporter-gcp-logging>=1.9.0a0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.37.0",
+    "opentelemetry-instrumentation-google-genai>=0.4b0,<0.5",
+    "opentelemetry-instrumentation-logging>=0.58b0,<0.59",
+    "pydantic>=2.11.0,<3.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "litellm>=1.60.0",
     "asyncpg>=0.30.0",
     "greenlet>=3.0.0",
+    "langfuse>=3.12.0",
+    "openinference-instrumentation-google-adk>=0.1.8",
 ]
 
-[project.optional-dependencies]
+[project.scripts]
+server = "agent_foundation.server:main"
+
+[dependency-groups]
 dev = [
-    "pytest>=8.0.0",
-    "mypy>=1.8.0",
-    "ruff>=0.6.0",
+    "ruff>=0.12.7,<1.0.0",
+    "mypy>=1.17.1,<2.0.0",
+    "pytest>=8.3.4,<9.0.0",
+    "pytest-cov>=7.0.0,<8.0.0",
+    "pytest-asyncio>=1.2.0,<2.0.0",
+    "ipykernel>=7.0.0,<8.0.0",
+    "types-grpcio>=1.0.0.20251009,<2.0.0.0",
 ]
 
-[tool.pytest.ini_options]
-minversion = "8.0"
-addopts = "-ra -q"
-testpaths = ["tests"]
+[build-system]
+requires = ["uv_build>=0.8.21,<0.9.0"]
+build-backend = "uv_build"
 
-[tool.mypy]
-python_version = "3.11"
-strict = true
-pretty = true
-show_error_codes = true
-warn_unreachable = true
-warn_unused_configs = true
-
-# Keep mypy focused on our code; dependencies may not ship type information.
-disable_error_code = ["import-untyped"]
-
-[[tool.mypy.overrides]]
-module = [
-    "google.*",
-    "dotenv.*",
-    "uvicorn.*",
-    "fastapi.*",
-]
-ignore_missing_imports = true
+[tool.uv.build-backend]
+module-name = "agent_foundation"
 
 [tool.ruff]
-line-length = 100
-target-version = "py311"
+src = ["src"]
+target-version = "py313"
+line-length = 88
+fix = true
+extend-exclude = ["notebooks", "init_template.py"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
 
 [tool.ruff.lint]
-select = ["E", "F", "B", "I", "UP"]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "S",   # flake8-bandit
+    "SIM", # flake8-simplify
+    "PTH", # flake8-use-pathlib
+]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]  # Allow assert statements in tests
+
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "src"
+packages = ["agent_foundation"]
+exclude = ["init_template.py"]
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "src/agent_foundation/**/__init__.py",
+    "src/agent_foundation/server.py",
+    "src/agent_foundation/**/agent.py",
+    "src/agent_foundation/utils/observability.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 2
+fail_under = 100
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::pydantic.warnings.PydanticDeprecatedSince212:google.genai.types",
+]

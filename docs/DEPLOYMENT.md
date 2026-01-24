@@ -5,8 +5,48 @@ You can deploy this Agent Platform using **Docker** (easiest compatibility) or *
 ## Prerequisites (Both Methods)
 
 1.  **Managed Postgres Database**: You need a connection string (e.g., from Neon, AWS RDS, Supabase).
-2.  **OpenRouter API Key**.
-3.  **Server**: A Linux server (Ubuntu/Debian recommended).
+2.  **OpenRouter or Google API Key**.
+3.  **AGENT_NAME**: A unique identifier for your agent service.
+4.  **Server**: A Linux server (Ubuntu/Debian recommended).
+
+---
+
+## CI/CD with GitHub Actions
+
+This repository includes a GitHub Actions workflow that automatically:
+1.  **Builds** a multi-platform Docker image (**AMD64 & ARM64**) on every push.
+2.  **Validates** code quality via `ruff`, `mypy`, and `pytest` before building.
+3.  **Caches** build layers using GitHub Actions cache (`type=gha`) for ultra-fast rebuilds.
+4.  **Pushes** the image to **GitHub Container Registry (GHCR)**.
+
+### Using GHCR Images
+
+Instead of building locally, you can pull the pre-built image from GHCR.
+
+1.  **Login to GHCR** (on your server):
+    ```bash
+    echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+    ```
+2.  **Pull the latest image**:
+    ```bash
+    docker pull ghcr.io/<your-org-or-username>/google-adk-on-bare-metal:main
+    ```
+
+### Automatic Deployment
+
+To automate deployment, update your `compose.yaml` to use the GHCR image:
+
+```yaml
+services:
+  agent:
+    image: ghcr.io/<your-org-or-username>/google-adk-on-bare-metal:main
+    # ... rest of config
+```
+
+Then your update command becomes:
+```bash
+docker compose pull && docker compose up -d
+```
 
 ---
 
@@ -43,8 +83,11 @@ Best for small servers (e.g., 512MB RAM) since you avoid Docker overhead.
 ```bash
 sudo apt update
 sudo apt install -y python3-venv git
+# Ensure Python 3.13+ is installed (e.g., via deadsnakes PPA on Ubuntu)
+# sudo add-apt-repository ppa:deadsnakes/ppa
+# sudo apt install python3.13 python3.13-venv
+
 # Install uv (fast python package manager)
-# Note: Inspect the script before running if you have security concerns.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.cargo/env
 ```

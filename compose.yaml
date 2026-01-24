@@ -1,19 +1,22 @@
 services:
   agent:
+    image: ghcr.io/queryplanner/google-adk-wo-gcp:main
     build: .
     ports:
       - "8080:8080"
     environment:
       - HOST=0.0.0.0
       - PORT=8080
+      - AGENT_NAME=local-dev
+      - LOG_LEVEL=INFO
+      - RELOAD_AGENTS=true
+      - SERVE_WEB_INTERFACE=true
       # DATABASE_URL and API Keys will be loaded from the .env file
     env_file:
       - .env
     # Volumes are for hot-reloading during development.
     # For production, remove these volumes to use the immutable code from the image.
     volumes:
-      - ./agents:/app/agents
-      - ./platform_utils:/app/platform_utils
-      - ./server.py:/app/server.py
+      - ./src:/app/src
     # restart: always # Uncomment for production to auto-restart
-    command: python -m server
+    command: python -m agent_foundation.server
