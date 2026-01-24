@@ -63,8 +63,8 @@ class TestLoggerInjection:
         callbacks = LoggingCallbacks(logger=custom_logger)
 
         # Test various callbacks
-        callbacks.before_agent(mock_logging_callback_context)
-        callbacks.after_agent(mock_logging_callback_context)
+        callbacks.before_agent(mock_logging_callback_context)  # type: ignore
+        callbacks.after_agent(mock_logging_callback_context)  # type: ignore
 
         # Verify logs were sent to custom logger
         custom_logger_records = [
@@ -88,7 +88,7 @@ class TestAgentCallbacks:
         caplog.set_level(logging.DEBUG)
         callbacks = LoggingCallbacks()
 
-        result = callbacks.before_agent(mock_logging_callback_context)
+        result = callbacks.before_agent(mock_logging_callback_context)  # type: ignore
 
         # Verify return value
         assert result is None
@@ -111,7 +111,7 @@ class TestAgentCallbacks:
         callbacks = LoggingCallbacks()
         context = MockLoggingCallbackContext(user_content=None)
 
-        result = callbacks.before_agent(context)
+        result = callbacks.before_agent(context)  # type: ignore
 
         assert result is None
         assert "*** Starting agent 'test_agent'" in caplog.text
@@ -126,7 +126,7 @@ class TestAgentCallbacks:
         caplog.set_level(logging.DEBUG)
         callbacks = LoggingCallbacks()
 
-        result = callbacks.after_agent(mock_logging_callback_context)
+        result = callbacks.after_agent(mock_logging_callback_context)  # type: ignore
 
         # Verify return value
         assert result is None
@@ -149,7 +149,7 @@ class TestAgentCallbacks:
         callbacks = LoggingCallbacks()
         context = MockLoggingCallbackContext(user_content=None)
 
-        result = callbacks.after_agent(context)
+        result = callbacks.after_agent(context)  # type: ignore
 
         assert result is None
         assert "*** Leaving agent 'test_agent'" in caplog.text
@@ -176,7 +176,7 @@ class TestModelCallbacks:
             ]
         )
 
-        result = callbacks.before_model(mock_logging_callback_context, llm_request)
+        result = callbacks.before_model(mock_logging_callback_context, llm_request)  # type: ignore
 
         assert result is None
         assert "*** Before LLM call for agent 'my_agent'" in caplog.text
@@ -194,7 +194,7 @@ class TestModelCallbacks:
         context = MockLoggingCallbackContext(user_content=None)
         llm_request = MockLlmRequest()
 
-        result = callbacks.before_model(context, llm_request)
+        result = callbacks.before_model(context, llm_request)  # type: ignore
 
         assert result is None
         assert "*** Before LLM call" in caplog.text
@@ -211,7 +211,7 @@ class TestModelCallbacks:
         caplog.set_level(logging.DEBUG)
         callbacks = LoggingCallbacks()
 
-        result = callbacks.after_model(mock_logging_callback_context, mock_llm_response)
+        result = callbacks.after_model(mock_logging_callback_context, mock_llm_response)  # type: ignore
 
         assert result is None
         assert "*** After LLM call for agent 'my_agent'" in caplog.text
@@ -231,7 +231,7 @@ class TestModelCallbacks:
 
         llm_response = MockLlmResponse(content=None)
 
-        result = callbacks.after_model(mock_logging_callback_context, llm_response)
+        result = callbacks.after_model(mock_logging_callback_context, llm_response)  # type: ignore
 
         assert result is None
         assert "*** After LLM call" in caplog.text
@@ -253,7 +253,7 @@ class TestToolCallbacks:
         tool = MockBaseTool(name="calculator")
         args = {"operation": "add", "x": 5, "y": 3}
 
-        result = callbacks.before_tool(tool, args, mock_tool_context)
+        result = callbacks.before_tool(tool, args, mock_tool_context)  # type: ignore
 
         assert result is None
         assert (
@@ -275,7 +275,7 @@ class TestToolCallbacks:
         args = {"param": "value"}
         context = MockToolContext(user_content=None)
 
-        result = callbacks.before_tool(tool, args, context)
+        result = callbacks.before_tool(tool, args, context)  # type: ignore
 
         assert result is None
         assert "*** Before invoking tool 'test_tool'" in caplog.text
@@ -294,7 +294,7 @@ class TestToolCallbacks:
         args = {"query": "SELECT * FROM users"}
         tool_response = {"rows": [{"id": 1, "name": "Alice"}], "count": 1}
 
-        result = callbacks.after_tool(tool, args, mock_tool_context, tool_response)
+        result = callbacks.after_tool(tool, args, mock_tool_context, tool_response)  # type: ignore
 
         assert result is None
         assert "*** After invoking tool 'database_query'" in caplog.text
@@ -316,7 +316,7 @@ class TestToolCallbacks:
         context = MockToolContext(user_content=None)
         tool_response = {"status": "success"}
 
-        result = callbacks.after_tool(tool, args, context, tool_response)
+        result = callbacks.after_tool(tool, args, context, tool_response)  # type: ignore
 
         assert result is None
         assert "*** After invoking tool 'test_tool'" in caplog.text
@@ -335,7 +335,7 @@ class TestEdgeCases:
         context = MockLoggingCallbackContext(state=MockState({}))
 
         # Test before_agent with empty state
-        result = callbacks.before_agent(context)
+        result = callbacks.before_agent(context)  # type: ignore
         assert result is None
         assert "State keys: dict_keys([])" in caplog.text
 
@@ -367,7 +367,7 @@ class TestEdgeCases:
 
         context = MockLoggingCallbackContext(state=complex_state)
 
-        result = callbacks.before_agent(context)
+        result = callbacks.before_agent(context)  # type: ignore
         assert result is None
         # Now we only log state keys, not the actual values
         assert "State keys: dict_keys(['user', 'session'])" in caplog.text
@@ -381,7 +381,7 @@ class TestEdgeCases:
         caplog.set_level(logging.INFO)
         caplog.clear()
 
-        callbacks.before_agent(context)
+        callbacks.before_agent(context)  # type: ignore
         info_records = [r for r in caplog.records if r.levelname == "INFO"]
         debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
 
@@ -393,7 +393,7 @@ class TestEdgeCases:
         caplog.set_level(logging.DEBUG)
         caplog.clear()
 
-        callbacks.before_agent(context)
+        callbacks.before_agent(context)  # type: ignore
         info_records = [r for r in caplog.records if r.levelname == "INFO"]
         debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
 
@@ -412,7 +412,7 @@ class TestEdgeCases:
 
         context = MockLoggingCallbackContext(user_content=mock_content)
 
-        callbacks.before_agent(context)
+        callbacks.before_agent(context)  # type: ignore
 
         # Verify model_dump was called with correct parameters
         mock_content.model_dump.assert_called_once_with(exclude_none=True, mode="json")
@@ -434,13 +434,13 @@ class TestEdgeCases:
         tool_response = {"result": "success"}
 
         # Test all callbacks return None
-        assert callbacks.before_agent(callback_context) is None
-        assert callbacks.after_agent(callback_context) is None
-        assert callbacks.before_model(callback_context, mock_llm_request) is None
-        assert callbacks.after_model(callback_context, mock_llm_response) is None
-        assert callbacks.before_tool(mock_base_tool, args, tool_context) is None
+        assert callbacks.before_agent(callback_context) is None  # type: ignore
+        assert callbacks.after_agent(callback_context) is None  # type: ignore
+        assert callbacks.before_model(callback_context, mock_llm_request) is None  # type: ignore
+        assert callbacks.after_model(callback_context, mock_llm_response) is None  # type: ignore
+        assert callbacks.before_tool(mock_base_tool, args, tool_context) is None  # type: ignore
         assert (
-            callbacks.after_tool(mock_base_tool, args, tool_context, tool_response)
+            callbacks.after_tool(mock_base_tool, args, tool_context, tool_response)  # type: ignore
             is None
         )
 
@@ -480,7 +480,7 @@ class TestWalrusOperators:
         )
 
         caplog.clear()
-        callbacks.before_agent(context_before_agent)
+        callbacks.before_agent(context_before_agent)  # type: ignore
 
         # Verify the exact unique content was assigned and used
         assert "unique_walrus_marker" in caplog.text
@@ -500,7 +500,7 @@ class TestWalrusOperators:
         )
 
         caplog.clear()
-        callbacks.after_agent(context_after_agent)
+        callbacks.after_agent(context_after_agent)  # type: ignore
 
         assert "unique_walrus_marker" in caplog.text
         assert "test_walrus_67890_after_agent" in caplog.text
@@ -520,7 +520,7 @@ class TestWalrusOperators:
         llm_request = MockLlmRequest()
 
         caplog.clear()
-        callbacks.before_model(context_before_model, llm_request)
+        callbacks.before_model(context_before_model, llm_request)  # type: ignore
 
         assert "unique_walrus_marker" in caplog.text
         assert "test_walrus_11111_before_model" in caplog.text
@@ -548,7 +548,7 @@ class TestWalrusOperators:
         llm_response = MockLlmResponse(content=unique_llm_content)
 
         caplog.clear()
-        callbacks.after_model(context_after_model, llm_response)
+        callbacks.after_model(context_after_model, llm_response)  # type: ignore
 
         # Verify both user_content and llm_content walrus operators worked
         assert "unique_walrus_marker" in caplog.text
@@ -575,7 +575,7 @@ class TestWalrusOperators:
         args = {"test": "walrus"}
 
         caplog.clear()
-        callbacks.before_tool(tool, args, tool_context_before)
+        callbacks.before_tool(tool, args, tool_context_before)  # type: ignore
 
         assert "unique_walrus_marker" in caplog.text
         assert "test_walrus_44444_before_tool" in caplog.text
@@ -595,7 +595,7 @@ class TestWalrusOperators:
         tool_response = {"result": "walrus_test_success"}
 
         caplog.clear()
-        callbacks.after_tool(tool, args, tool_context_after, tool_response)
+        callbacks.after_tool(tool, args, tool_context_after, tool_response)  # type: ignore
 
         assert "unique_walrus_marker" in caplog.text
         assert "test_walrus_55555_after_tool" in caplog.text
@@ -628,31 +628,31 @@ class TestWalrusOperators:
 
         # Test before_agent with None user_content
         caplog.clear()
-        callbacks.before_agent(context_none)
+        callbacks.before_agent(context_none)  # type: ignore
         assert "User Content:" not in caplog.text
 
         # Test after_agent with None user_content
         caplog.clear()
-        callbacks.after_agent(context_none)
+        callbacks.after_agent(context_none)  # type: ignore
         assert "User Content:" not in caplog.text
 
         # Test before_model with None user_content
         caplog.clear()
-        callbacks.before_model(context_none, MockLlmRequest())
+        callbacks.before_model(context_none, MockLlmRequest())  # type: ignore
         assert "User Content:" not in caplog.text
 
         # Test after_model with None user_content and None llm_content
         caplog.clear()
-        callbacks.after_model(context_none, llm_response_none)
+        callbacks.after_model(context_none, llm_response_none)  # type: ignore
         assert "User Content:" not in caplog.text
         assert "LLM response:" not in caplog.text
 
         # Test before_tool with None user_content
         caplog.clear()
-        callbacks.before_tool(MockBaseTool(), {}, tool_context_none)
+        callbacks.before_tool(MockBaseTool(), {}, tool_context_none)  # type: ignore
         assert "User Content:" not in caplog.text
 
         # Test after_tool with None user_content
         caplog.clear()
-        callbacks.after_tool(MockBaseTool(), {}, tool_context_none, {})
+        callbacks.after_tool(MockBaseTool(), {}, tool_context_none, {})  # type: ignore
         assert "User Content:" not in caplog.text

@@ -25,7 +25,7 @@ class TestExampleTool:
         tool_context = MockToolContext(state=state)
 
         # Execute tool
-        result = example_tool(tool_context)
+        result = example_tool(tool_context)  # type: ignore
 
         # Verify return value
         assert result["status"] == "success"
@@ -43,7 +43,7 @@ class TestExampleTool:
         tool_context = MockToolContext(state=state)
 
         # Execute tool
-        example_tool(tool_context)
+        example_tool(tool_context)  # type: ignore
 
         # Verify logging
         assert "Session state keys:" in caplog.text
@@ -65,7 +65,7 @@ class TestExampleTool:
         tool_context = MockToolContext(state=state)
 
         # Execute tool
-        result = example_tool(tool_context)
+        result = example_tool(tool_context)  # type: ignore
 
         # Verify success even with empty state
         assert result["status"] == "success"

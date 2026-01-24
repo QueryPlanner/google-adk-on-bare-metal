@@ -1,10 +1,10 @@
 [project]
-name = "agent-foundation"
+name = "google-adk-on-bare-metal"
 version = "0.8.0"
-description = "Opinionated, production-ready LLM Agent deployment with enterprise-grade infrastructure"
+description = "Production-ready template for building and deploying AI agents using Google ADK, LiteLLM, and Postgres on self-hosted infrastructure"
 readme = "README.md"
 authors = [
-    { name = "doug", email = "110487462+doughayden@users.noreply.github.com" }
+    { name = "queryplanner", email = "queryplanner@users.noreply.github.com" }
 ]
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -42,6 +42,9 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.8.21,<0.9.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agent_foundation"
 
 [tool.ruff]
 src = ["src"]

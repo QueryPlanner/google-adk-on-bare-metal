@@ -147,8 +147,8 @@ SERVE_WEB_INTERFACE=true
 
 ### Port already in use
 ```bash
-# Check what's using port 8000
-lsof -i :8000
+# Check what's using port 8080
+lsof -i :8080
 
 # Stop the conflicting process or change PORT in .env
 PORT=8001
@@ -167,7 +167,7 @@ DOCKER_BUILDKIT=1 docker build -t your-agent-name:latest .
 # Run directly
 docker run \
   -v ./data:/app/data:ro \
-  -p 127.0.0.1:8000:8000 \
+  -p 127.0.0.1:8080:8080 \
   --env-file .env \
   your-agent-name:latest
 ```

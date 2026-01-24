@@ -96,7 +96,7 @@ All tasks follow a strict lifecycle:
 
         **Manual Verification Steps:**
         1.  **Ensure the server is running:** `uv run python -m agent_foundation.server`
-        2.  **Execute the following command in your terminal:** `curl -X GET http://localhost:8000/health`
+        2.  **Execute the following command in your terminal:** `curl -X GET http://localhost:8080/health`
         3.  **Confirm that you receive:** A JSON response with a status of `{"status": "ok"}`.
         ```
 

@@ -31,7 +31,7 @@ Observability (Optional):
 Optional:
 
 - `HOST`: server bind host (default: `127.0.0.1`)
-- `PORT`: server port (default: `8000`)
+- `PORT`: server port (default: `8080`)
 - `LOG_LEVEL`: Logging verbosity (default: `INFO`)
 - `SERVE_WEB_INTERFACE`: Whether to serve the ADK web UI (default: `false`)
 

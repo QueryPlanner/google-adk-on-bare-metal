@@ -1,10 +1,18 @@
 """Unit tests for the callbacks module."""
 
 import logging
+from typing import cast
 
 import pytest
 
+from conftest import MockMemoryCallbackContext
 from agent_foundation.callbacks import add_session_to_memory
+from google.adk.agents.callback_context import CallbackContext
+
+
+def as_callback_context(context: MockMemoryCallbackContext) -> CallbackContext:
+    """Treat mock callback contexts as real CallbackContext objects for typing."""
+    return cast(CallbackContext, context)
 
 
 class TestAddSessionToMemory:
@@ -13,17 +21,14 @@ class TestAddSessionToMemory:
     @pytest.mark.asyncio
     async def test_add_session_to_memory_success(
         self,
-        mock_memory_callback_context,
+        mock_memory_callback_context: MockMemoryCallbackContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test that callback succeeds when context.add_session_to_memory succeeds."""
         caplog.set_level(logging.INFO)
 
         # Execute callback
-        result = await add_session_to_memory(mock_memory_callback_context)
-
-        # Verify callback returns None
-        assert result is None
+        await add_session_to_memory(as_callback_context(mock_memory_callback_context))
 
         # Verify add_session_to_memory was called on the context
         assert mock_memory_callback_context.add_session_to_memory_called
@@ -34,17 +39,16 @@ class TestAddSessionToMemory:
     @pytest.mark.asyncio
     async def test_add_session_to_memory_handles_value_error(
         self,
-        mock_memory_callback_context_no_service,
+        mock_memory_callback_context_no_service: MockMemoryCallbackContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test that callback handles ValueError (e.g., no memory service)."""
         caplog.set_level(logging.WARNING)
 
         # Execute callback - should not raise
-        result = await add_session_to_memory(mock_memory_callback_context_no_service)
-
-        # Verify callback returns None (doesn't propagate exception)
-        assert result is None
+        await add_session_to_memory(
+            as_callback_context(mock_memory_callback_context_no_service)
+        )
 
         # Verify the method was attempted
         assert mock_memory_callback_context_no_service.add_session_to_memory_called
@@ -58,19 +62,16 @@ class TestAddSessionToMemory:
     @pytest.mark.asyncio
     async def test_add_session_to_memory_handles_attribute_error(
         self,
-        mock_memory_callback_context_with_attribute_error,
+        mock_memory_callback_context_with_attribute_error: MockMemoryCallbackContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test that callback handles AttributeError gracefully."""
         caplog.set_level(logging.WARNING)
 
         # Execute callback - should not raise
-        result = await add_session_to_memory(
-            mock_memory_callback_context_with_attribute_error
+        await add_session_to_memory(
+            as_callback_context(mock_memory_callback_context_with_attribute_error)
         )
-
-        # Verify callback returns None
-        assert result is None
 
         # Verify the method was attempted
         ctx = mock_memory_callback_context_with_attribute_error
@@ -83,19 +84,16 @@ class TestAddSessionToMemory:
     @pytest.mark.asyncio
     async def test_add_session_to_memory_handles_runtime_error(
         self,
-        mock_memory_callback_context_with_runtime_error,
+        mock_memory_callback_context_with_runtime_error: MockMemoryCallbackContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test that callback handles RuntimeError gracefully."""
         caplog.set_level(logging.WARNING)
 
         # Execute callback - should not raise
-        result = await add_session_to_memory(
-            mock_memory_callback_context_with_runtime_error
+        await add_session_to_memory(
+            as_callback_context(mock_memory_callback_context_with_runtime_error)
         )
-
-        # Verify callback returns None (doesn't propagate exception)
-        assert result is None
 
         # Verify the method was attempted
         ctx = mock_memory_callback_context_with_runtime_error
@@ -109,8 +107,8 @@ class TestAddSessionToMemory:
     @pytest.mark.asyncio
     async def test_add_session_to_memory_logging_levels(
         self,
-        mock_memory_callback_context,
-        mock_memory_callback_context_no_service,
+        mock_memory_callback_context: MockMemoryCallbackContext,
+        mock_memory_callback_context_no_service: MockMemoryCallbackContext,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test that callback uses appropriate logging levels."""
@@ -118,7 +116,7 @@ class TestAddSessionToMemory:
         caplog.set_level(logging.INFO)
         caplog.clear()
 
-        await add_session_to_memory(mock_memory_callback_context)
+        await add_session_to_memory(as_callback_context(mock_memory_callback_context))
 
         # Check for INFO log (starting callback)
         info_records = [r for r in caplog.records if r.levelname == "INFO"]
@@ -129,7 +127,9 @@ class TestAddSessionToMemory:
         caplog.set_level(logging.WARNING)
         caplog.clear()
 
-        await add_session_to_memory(mock_memory_callback_context_no_service)
+        await add_session_to_memory(
+            as_callback_context(mock_memory_callback_context_no_service)
+        )
 
         warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warning_records) == 1
@@ -141,14 +141,10 @@ class TestAddSessionToMemory:
     @pytest.mark.asyncio
     async def test_add_session_to_memory_returns_none(
         self,
-        mock_memory_callback_context,
+        mock_memory_callback_context: MockMemoryCallbackContext,
     ) -> None:
         """Test that callback always returns None."""
-        # Execute callback
-        result = await add_session_to_memory(mock_memory_callback_context)
-
-        # Verify callback returns None (doesn't short-circuit)
-        assert result is None
+        await add_session_to_memory(as_callback_context(mock_memory_callback_context))
 
     @pytest.mark.asyncio
     async def test_add_session_to_memory_multiple_calls(
@@ -165,12 +161,10 @@ class TestAddSessionToMemory:
         ctx2 = MockMemoryCallbackContext()
 
         # Execute callbacks
-        result1 = await add_session_to_memory(ctx1)
-        result2 = await add_session_to_memory(ctx2)
+        await add_session_to_memory(as_callback_context(ctx1))
+        await add_session_to_memory(as_callback_context(ctx2))
 
         # Verify both completed successfully
-        assert result1 is None
-        assert result2 is None
         assert ctx1.add_session_to_memory_called
         assert ctx2.add_session_to_memory_called
 

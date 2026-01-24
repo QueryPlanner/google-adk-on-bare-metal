@@ -130,7 +130,7 @@ class ServerEnv(BaseModel):
     )
 
     allow_origins: str = Field(
-        default='["http://127.0.0.1", "http://127.0.0.1:8000"]',
+        default='["http://127.0.0.1", "http://127.0.0.1:8080"]',
         alias="ALLOW_ORIGINS",
         description="JSON array string of allowed CORS origins",
     )
@@ -142,7 +142,7 @@ class ServerEnv(BaseModel):
     )
 
     port: int = Field(
-        default=8000,
+        default=8080,
         alias="PORT",
         description="Server port",
     )

@@ -266,7 +266,7 @@ ENV VIRTUAL_ENV=/app/.venv \
     PYTHONUNBUFFERED=1 \
     AGENT_DIR=/app/src \
     HOST=0.0.0.0 \
-    PORT=8000
+    PORT=8080
 ```
 **What:** Configure runtime environment
 **Why:**
@@ -277,7 +277,7 @@ ENV VIRTUAL_ENV=/app/.venv \
 | `PATH="/app/.venv/bin:$PATH"` | Make venv binaries available (python, uvicorn) |
 | `PYTHONUNBUFFERED=1` | Don't buffer stdout/stderr (better logs in Docker) |
 | `HOST=0.0.0.0` | Explicitly bind all interfaces for containers (server.py defaults to 127.0.0.1) |
-| `PORT=8000` | Explicitly set default port (matches EXPOSE and server.py default) |
+| `PORT=8080` | Explicitly set default port (matches EXPOSE and server.py default) |
 | `AGENT_DIR=/app/src` | Override agent directory path (see AGENT_DIR section below) |
 
 ---
@@ -330,9 +330,9 @@ USER app
 
 ### Expose Port
 ```dockerfile
-EXPOSE 8000
+EXPOSE 8080
 ```
-**What:** Document that container listens on port 8000
+**What:** Document that container listens on port 8080
 **Why:**
 - Documentation only (doesn't actually publish port)
 - Tools like docker-compose read this for defaults

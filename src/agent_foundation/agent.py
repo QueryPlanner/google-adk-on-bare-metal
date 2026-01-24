@@ -2,6 +2,7 @@
 
 import logging
 import os
+from typing import Any
 
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
@@ -23,7 +24,7 @@ logging_callbacks = LoggingCallbacks()
 
 # Determine model configuration
 model_name = os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-flash")
-model = model_name
+model: Any = model_name
 
 # Explicitly use LiteLlm for OpenRouter or other provider-prefixed models
 # that might not be auto-detected by ADK's registry.

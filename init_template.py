@@ -23,8 +23,8 @@ WHAT IT DOES:
     3. Derives package name (my-agent → my_agent)
     4. Replaces template names with yours:
        - agent_foundation → your_package_name
-       - agent-foundation → your-repo-name
-       - template-owner/agent-foundation → your-owner/your-repo
+       - google-adk-on-bare-metal → your-repo-name
+       - QueryPlanner/google-adk-on-bare-metal → your-owner/your-repo
     5. Renames src/agent_foundation/ → src/{package_name}/
     6. Updates imports, config, and docs in all files
     7. Updates GitHub Actions badge URLs

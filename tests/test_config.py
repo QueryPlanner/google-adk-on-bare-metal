@@ -46,9 +46,9 @@ class TestServerEnv:
         assert env.agent_engine is None
         assert env.database_url is None
         assert env.openrouter_api_key is None
-        assert env.allow_origins == '["http://127.0.0.1", "http://127.0.0.1:8000"]'
+        assert env.allow_origins == '["http://127.0.0.1", "http://127.0.0.1:8080"]'
         assert env.host == "127.0.0.1"
-        assert env.port == 8000
+        assert env.port == 8080
 
     def test_server_env_optional_fields_with_values(
         self, valid_server_env: dict[str, str]

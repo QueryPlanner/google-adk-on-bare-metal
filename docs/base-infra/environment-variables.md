@@ -51,14 +51,14 @@ Complete reference for all environment variables used in this project.
 - **Purpose:** Server bind address (use `0.0.0.0` for Docker)
 
 **PORT**
-- **Default:** `8000`
+- **Default:** `8080`
 - **Purpose:** Server listening port
 
 ### Feature Flags
 
 **SERVE_WEB_INTERFACE**
 - **Default:** `FALSE`
-- **Purpose:** Enables ADK web UI at http://127.0.0.1:8000
+- **Purpose:** Enables ADK web UI at http://127.0.0.1:8080
 - **Options:** `TRUE` / `FALSE`
 
 **RELOAD_AGENTS**

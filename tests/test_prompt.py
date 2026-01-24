@@ -72,7 +72,7 @@ class TestReturnGlobalInstruction:
         self, mock_readonly_context: MockReadonlyContext
     ) -> None:
         """Test that InstructionProvider returns a string when given ReadonlyContext."""
-        instruction = return_global_instruction(mock_readonly_context)
+        instruction = return_global_instruction(mock_readonly_context)  # type: ignore
 
         assert isinstance(instruction, str)
         assert len(instruction) > 0
@@ -81,7 +81,7 @@ class TestReturnGlobalInstruction:
         self, mock_readonly_context: MockReadonlyContext
     ) -> None:
         """Test that instruction includes today's date dynamically."""
-        instruction = return_global_instruction(mock_readonly_context)
+        instruction = return_global_instruction(mock_readonly_context)  # type: ignore
         today = str(date.today())
 
         assert today in instruction
@@ -91,7 +91,7 @@ class TestReturnGlobalInstruction:
         self, mock_readonly_context: MockReadonlyContext
     ) -> None:
         """Test that instruction identifies role as helpful assistant."""
-        instruction = return_global_instruction(mock_readonly_context)
+        instruction = return_global_instruction(mock_readonly_context)  # type: ignore
 
         assert "helpful" in instruction.lower()
         assert "assistant" in instruction.lower()
@@ -103,14 +103,14 @@ class TestReturnGlobalInstruction:
         # Mock date.today() to return a specific date
         with patch("agent_foundation.prompt.date") as mock_date:
             mock_date.today.return_value = date(2025, 1, 15)
-            instruction1 = return_global_instruction(mock_readonly_context)
+            instruction1 = return_global_instruction(mock_readonly_context)  # type: ignore
 
             # Verify first date
             assert "2025-01-15" in instruction1
 
             # Change the mocked date
             mock_date.today.return_value = date(2025, 2, 20)
-            instruction2 = return_global_instruction(mock_readonly_context)
+            instruction2 = return_global_instruction(mock_readonly_context)  # type: ignore
 
             # Verify second date
             assert "2025-02-20" in instruction2
@@ -126,7 +126,7 @@ class TestReturnGlobalInstruction:
         )
 
         # Function should execute without errors
-        instruction = return_global_instruction(context)
+        instruction = return_global_instruction(context)  # type: ignore
 
         # Verify it returns valid instruction
         assert isinstance(instruction, str)
@@ -145,8 +145,8 @@ class TestReturnGlobalInstruction:
         context1 = MockReadonlyContext(state={"user_tier": "premium"})
         context2 = MockReadonlyContext(state={"user_tier": "free"})
 
-        instruction1 = return_global_instruction(context1)
-        instruction2 = return_global_instruction(context2)
+        instruction1 = return_global_instruction(context1)  # type: ignore
+        instruction2 = return_global_instruction(context2)  # type: ignore
 
         # Currently, instructions should be identical (state not used)
         # If future implementation uses state, this test will fail and should be updated
@@ -160,8 +160,8 @@ class TestReturnGlobalInstruction:
         self, mock_readonly_context: MockReadonlyContext
     ) -> None:
         """Test that instruction maintains consistent format across calls."""
-        instruction1 = return_global_instruction(mock_readonly_context)
-        instruction2 = return_global_instruction(mock_readonly_context)
+        instruction1 = return_global_instruction(mock_readonly_context)  # type: ignore
+        instruction2 = return_global_instruction(mock_readonly_context)  # type: ignore
 
         # Should be identical when called at same time (same date)
         assert instruction1 == instruction2

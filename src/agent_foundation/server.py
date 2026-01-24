@@ -87,7 +87,7 @@ def main() -> None:
         OPENROUTER_API_KEY: Key for LiteLLM/OpenRouter
         ALLOW_ORIGINS: JSON array string of allowed CORS origins
         HOST: Server host (default: 127.0.0.1, set to 0.0.0.0 for containers)
-        PORT: Server port (default: 8000)
+        PORT: Server port (default: 8080)
     """
     uvicorn.run(
         app,
