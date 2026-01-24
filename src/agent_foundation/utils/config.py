@@ -135,6 +135,12 @@ class ServerEnv(BaseModel):
         description="Database URL for session storage (e.g., postgresql://...)",
     )
 
+    openrouter_api_key: str | None = Field(
+        default=None,
+        alias="OPENROUTER_API_KEY",
+        description="OpenRouter API key for LiteLLM integration",
+    )
+
     artifact_service_uri: str | None = Field(
         default=None,
         alias="ARTIFACT_SERVICE_URI",
@@ -181,6 +187,7 @@ class ServerEnv(BaseModel):
         print(f"RELOAD_AGENTS:         {self.reload_agents}")
         print(f"AGENT_ENGINE:          {self.agent_engine}")
         print(f"DATABASE_URL:          {self.database_url}")
+        print(f"OPENROUTER_API_KEY:    {'********' if self.openrouter_api_key else None}")
         print(f"ARTIFACT_SERVICE_URI:  {self.artifact_service_uri}")
         print(f"HOST:                  {self.host}")
         print(f"PORT:                  {self.port}")

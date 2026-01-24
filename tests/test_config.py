@@ -63,6 +63,8 @@ class TestServerEnv:
             "SERVE_WEB_INTERFACE": "true",
             "RELOAD_AGENTS": "true",
             "AGENT_ENGINE": "test-engine-id",
+            "DATABASE_URL": "postgresql://user:pass@localhost/db",
+            "OPENROUTER_API_KEY": "sk-or-v1-test",
             "ARTIFACT_SERVICE_URI": "gs://test-bucket",
             "ALLOW_ORIGINS": '["http://localhost:3000"]',
             "HOST": "0.0.0.0",  # noqa: S104
@@ -78,6 +80,8 @@ class TestServerEnv:
         assert env.serve_web_interface is True
         assert env.reload_agents is True
         assert env.agent_engine == "test-engine-id"
+        assert env.database_url == "postgresql://user:pass@localhost/db"
+        assert env.openrouter_api_key == "sk-or-v1-test"
         assert env.artifact_service_uri == "gs://test-bucket"
         assert env.allow_origins == '["http://localhost:3000"]'
         assert env.host == "0.0.0.0"  # noqa: S104

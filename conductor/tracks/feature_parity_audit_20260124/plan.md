@@ -24,19 +24,17 @@
 - [x] Task: Conductor - User Manual Verification 'Feature Parity Audit' (Protocol in workflow.md)
 
 ## Phase 3: Gap Resolution (Iterative)
-- [ ] Task: Port any identified missing non-GCP features.
-    - [ ] **Sub-task:** Write tests for missing feature.
-    - [ ] **Sub-task:** Implement feature.
-    - [ ] **Sub-task:** Verify parity.
-- [ ] Task: Implement Multi-LLM Configuration.
-    - [ ] **Sub-task:** Analyze `.venv/lib/python3.13/site-packages/google/adk/models` to understand LiteLLM integration in `google-adk`.
-    - [ ] **Sub-task:** Add `OPENROUTER_API_KEY` to `ServerEnv` in `config.py`.
-    - [ ] **Sub-task:** Verify `litellm` dependency or `google-adk` support.
-    - [ ] **Sub-task:** Test with OpenRouter key (mocked).
-- [ ] Task: Clean up any residual GCP-only code that causes errors in self-hosted mode.
-    - [ ] **Sub-task:** Write test case reproducing error (if applicable).
-    - [ ] **Sub-task:** Refactor to be platform-agnostic or remove.
-- [ ] Task: Conductor - User Manual Verification 'Gap Resolution' (Protocol in workflow.md)
+- [x] Task: Port any identified missing non-GCP features. [checkpoint: no-missing-features]
+    - [x] **Sub-task:** Write tests for missing feature.
+    - [x] **Sub-task:** Implement feature.
+    - [x] **Sub-task:** Verify parity.
+- [x] Task: Implement Multi-LLM Configuration. [checkpoint: multillm-implemented]
+    - [x] **Sub-task:** Analyze `.venv/lib/python3.13/site-packages/google/adk/models` to understand LiteLLM integration in `google-adk`. [checkpoint: adk-models-analysis]
+    - [x] **Sub-task:** Add `OPENROUTER_API_KEY` to `ServerEnv` in `config.py`.
+    - [x] **Sub-task:** Verify `litellm` dependency or `google-adk` support.
+    - [x] **Sub-task:** Test with OpenRouter key (mocked).
+- [x] Task: Clean up any residual GCP-only code that causes errors in self-hosted mode. [checkpoint: no-residual-gcp-errors]
+- [x] Task: Conductor - User Manual Verification 'Gap Resolution' (Protocol in workflow.md)
 
 ## Phase 4: Documentation Overhaul
 - [ ] Task: Audit `README.md`.
