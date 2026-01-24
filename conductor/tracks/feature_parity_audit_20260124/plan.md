@@ -36,7 +36,7 @@
 - [x] Task: Clean up any residual GCP-only code that causes errors in self-hosted mode. [checkpoint: no-residual-gcp-errors]
 - [x] Task: Conductor - User Manual Verification 'Gap Resolution' (Protocol in workflow.md)
 
-## Phase 4: GCP Removal (Bare Metal Adaptation)
+## Phase 4: GCP Removal (Bare Metal Adaptation) [checkpoint: 109e85f]
 - [x] Task: Remove GCP-specific parameters from `ServerEnv` in `config.py`. [checkpoint: config-degcp]
     - [x] Remove `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `ARTIFACT_SERVICE_URI`, `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`.
 - [x] Task: Update `server.py` to remove GCP-specific initialization logic. [checkpoint: server-degcp]
