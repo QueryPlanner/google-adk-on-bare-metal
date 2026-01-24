@@ -37,13 +37,13 @@
 - [x] Task: Conductor - User Manual Verification 'Gap Resolution' (Protocol in workflow.md)
 
 ## Phase 4: GCP Removal (Bare Metal Adaptation)
-- [ ] Task: Remove GCP-specific parameters from `ServerEnv` in `config.py`.
-    - [ ] Remove `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `ARTIFACT_SERVICE_URI`, `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`.
-- [ ] Task: Update `server.py` to remove GCP-specific initialization logic.
-    - [ ] Remove conditional OpenTelemetry setup based on GCP project.
-- [ ] Task: Verify removal does not break core functionality.
-    - [ ] Run tests.
-- [ ] Task: Conductor - User Manual Verification 'GCP Removal' (Protocol in workflow.md)
+- [x] Task: Remove GCP-specific parameters from `ServerEnv` in `config.py`. [checkpoint: config-degcp]
+    - [x] Remove `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `ARTIFACT_SERVICE_URI`, `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`.
+- [x] Task: Update `server.py` to remove GCP-specific initialization logic. [checkpoint: server-degcp]
+    - [x] Remove conditional OpenTelemetry setup based on GCP project.
+- [x] Task: Verify removal does not break core functionality. [checkpoint: gcp-removal-verified]
+    - [x] Run tests.
+- [x] Task: Conductor - User Manual Verification 'GCP Removal' (Protocol in workflow.md)
 
 ## Phase 5: Documentation Overhaul
 - [ ] Task: Audit `README.md`.

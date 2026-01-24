@@ -19,7 +19,6 @@ class TestServerEnv:
         """Test creating ServerEnv with valid required fields."""
         env = ServerEnv.model_validate(valid_server_env)
 
-        assert env.google_cloud_project == "test-project"
         assert env.agent_name == "test-agent"
 
     def test_server_env_missing_required_field_raises_validation_error(self) -> None:
@@ -41,12 +40,12 @@ class TestServerEnv:
         env = ServerEnv.model_validate(valid_server_env)
 
         # Check defaults
-        assert env.google_cloud_location == "us-central1"
         assert env.log_level == "INFO"
         assert env.serve_web_interface is False
         assert env.reload_agents is False
         assert env.agent_engine is None
-        assert env.artifact_service_uri is None
+        assert env.database_url is None
+        assert env.openrouter_api_key is None
         assert env.allow_origins == '["http://127.0.0.1", "http://127.0.0.1:8000"]'
         assert env.host == "127.0.0.1"
         assert env.port == 8000
@@ -57,7 +56,6 @@ class TestServerEnv:
         """Test setting optional fields with actual values."""
         data = {
             **valid_server_env,
-            "GOOGLE_CLOUD_LOCATION": "us-west1",
             "AGENT_NAME": "custom-agent",
             "LOG_LEVEL": "DEBUG",
             "SERVE_WEB_INTERFACE": "true",
@@ -65,16 +63,13 @@ class TestServerEnv:
             "AGENT_ENGINE": "test-engine-id",
             "DATABASE_URL": "postgresql://user:pass@localhost/db",
             "OPENROUTER_API_KEY": "sk-or-v1-test",
-            "ARTIFACT_SERVICE_URI": "gs://test-bucket",
             "ALLOW_ORIGINS": '["http://localhost:3000"]',
             "HOST": "0.0.0.0",  # noqa: S104
             "PORT": "9000",
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false",
         }
 
         env = ServerEnv.model_validate(data)
 
-        assert env.google_cloud_location == "us-west1"
         assert env.agent_name == "custom-agent"
         assert env.log_level == "DEBUG"
         assert env.serve_web_interface is True
@@ -82,11 +77,9 @@ class TestServerEnv:
         assert env.agent_engine == "test-engine-id"
         assert env.database_url == "postgresql://user:pass@localhost/db"
         assert env.openrouter_api_key == "sk-or-v1-test"
-        assert env.artifact_service_uri == "gs://test-bucket"
         assert env.allow_origins == '["http://localhost:3000"]'
         assert env.host == "0.0.0.0"  # noqa: S104
         assert env.port == 9000
-        assert env.otel_capture_content is False
 
     def test_agent_engine_uri_property(self, valid_server_env: dict[str, str]) -> None:
         """Test that agent_engine_uri property is computed correctly."""
@@ -153,9 +146,7 @@ class TestServerEnv:
         output = captured.out
 
         # Check key information is printed
-        assert "test-project" in output
         assert "test-agent" in output
-        assert "GOOGLE_CLOUD_PROJECT" in output
         assert "AGENT_NAME" in output
         assert "LOG_LEVEL" in output
 
@@ -166,7 +157,7 @@ class TestServerEnv:
         data = {**valid_server_env, "EXTRA_VAR": "extra-value", "PATH": "/usr/bin"}
 
         env = ServerEnv.model_validate(data)
-        assert env.google_cloud_project == "test-project"
+        assert env.agent_name == "test-agent"
         # Extra fields should not be included
         assert not hasattr(env, "EXTRA_VAR")
         assert not hasattr(env, "PATH")
@@ -188,7 +179,6 @@ class TestInitializeEnvironment:
         env = initialize_environment(ServerEnv, print_config=False)
 
         mock_load_dotenv.assert_called_once_with(override=True)
-        assert env.google_cloud_project == "test-project"
         assert env.agent_name == "test-agent"
 
     def test_initialize_environment_validation_failure(

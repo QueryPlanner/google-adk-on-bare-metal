@@ -87,18 +87,6 @@ class ServerEnv(BaseModel):
         otel_capture_content: OpenTelemetry message content capture setting.
     """
 
-    google_cloud_project: str | None = Field(
-        default=None,
-        alias="GOOGLE_CLOUD_PROJECT",
-        description="GCP project ID for authentication and observability",
-    )
-
-    google_cloud_location: str = Field(
-        default="us-central1",
-        alias="GOOGLE_CLOUD_LOCATION",
-        description="Vertex AI region (e.g., us-central1)",
-    )
-
     agent_name: str = Field(
         ...,
         alias="AGENT_NAME",
@@ -141,12 +129,6 @@ class ServerEnv(BaseModel):
         description="OpenRouter API key for LiteLLM integration",
     )
 
-    artifact_service_uri: str | None = Field(
-        default=None,
-        alias="ARTIFACT_SERVICE_URI",
-        description="GCS bucket URI for artifact storage",
-    )
-
     allow_origins: str = Field(
         default='["http://127.0.0.1", "http://127.0.0.1:8000"]',
         alias="ALLOW_ORIGINS",
@@ -165,12 +147,6 @@ class ServerEnv(BaseModel):
         description="Server port",
     )
 
-    otel_capture_content: bool = Field(
-        default=False,
-        alias="OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
-        description="OpenTelemetry message content capture setting",
-    )
-
     model_config = ConfigDict(
         populate_by_name=True,  # Allow both field names and aliases
         extra="ignore",  # Ignore extra env vars (system vars, etc.)
@@ -179,8 +155,6 @@ class ServerEnv(BaseModel):
     def print_config(self) -> None:
         """Print server configuration for user verification."""
         print("\n\n✅ Environment variables loaded for server:\n")
-        print(f"GOOGLE_CLOUD_PROJECT:  {self.google_cloud_project}")
-        print(f"GOOGLE_CLOUD_LOCATION: {self.google_cloud_location}")
         print(f"AGENT_NAME:            {self.agent_name}")
         print(f"LOG_LEVEL:             {self.log_level}")
         print(f"SERVE_WEB_INTERFACE:   {self.serve_web_interface}")
@@ -188,11 +162,9 @@ class ServerEnv(BaseModel):
         print(f"AGENT_ENGINE:          {self.agent_engine}")
         print(f"DATABASE_URL:          {self.database_url}")
         print(f"OPENROUTER_API_KEY:    {'********' if self.openrouter_api_key else None}")
-        print(f"ARTIFACT_SERVICE_URI:  {self.artifact_service_uri}")
         print(f"HOST:                  {self.host}")
         print(f"PORT:                  {self.port}")
-        print(f"ALLOW_ORIGINS:         {self.allow_origins}")
-        print(f"OTEL_CAPTURE_CONTENT:  {self.otel_capture_content}\n\n")
+        print(f"ALLOW_ORIGINS:         {self.allow_origins}\n\n")
 
     @property
     def agent_engine_uri(self) -> str | None:
