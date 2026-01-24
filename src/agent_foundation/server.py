@@ -47,8 +47,9 @@ if session_uri and session_uri.startswith("postgresql://"):
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
     session_service_uri=session_uri,
-    artifact_service_uri=None, # Explicitly None as GCP bucket not used
-    memory_service_uri=None, # Memory service does not yet support Postgres scheme in ADK
+    artifact_service_uri=None,  # Explicitly None as GCP bucket not used
+    # Memory service does not yet support Postgres scheme in ADK
+    memory_service_uri=None,
     allow_origins=env.allow_origins_list,
     web=env.serve_web_interface,
     reload_agents=env.reload_agents,

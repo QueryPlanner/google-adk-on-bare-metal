@@ -3,11 +3,11 @@
 This module provides consolidated observability configuration.
 """
 
+import base64
 import logging
 import os
-import uuid
 import sys
-import base64
+import uuid
 
 from opentelemetry.sdk.resources import (
     SERVICE_INSTANCE_ID,
@@ -49,22 +49,25 @@ def configure_otel_resource(agent_name: str) -> None:
     secret_key = os.getenv("LANGFUSE_SECRET_KEY")
     if public_key and secret_key:
         print("💡 Langfuse keys detected. Configuring OTLP exporter...")
-        
+
         # 1. Set Endpoint (default to EU if not specified)
-        base_url = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com").rstrip("/")
+        base_url = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com").rstrip(
+            "/"
+        )
         if "OTEL_EXPORTER_OTLP_ENDPOINT" not in os.environ:
             os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{base_url}/api/public/otel"
-        
+
         # 2. Generate Auth Header
         auth_str = f"{public_key}:{secret_key}"
         encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
         os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {encoded_auth}"
-        
+
         # 3. Ensure Protocol is set to http/protobuf (required by Langfuse)
         if "OTEL_EXPORTER_OTLP_PROTOCOL" not in os.environ:
             os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf"
-        
-        print(f"✅ Langfuse OTLP configured for endpoint: {os.environ['OTEL_EXPORTER_OTLP_ENDPOINT']}")
+
+        endpoint = os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
+        print(f"✅ Langfuse OTLP configured for endpoint: {endpoint}")
 
 
 def setup_logging(log_level: str) -> None:
@@ -74,13 +77,13 @@ def setup_logging(log_level: str) -> None:
         log_level: Logging verbosity level as string
     """
     level = getattr(logging, log_level.upper(), logging.INFO)
-    
+
     # Configure root logger
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)]
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
-    
+
     # Set levels for some noisy libraries if needed
     logging.getLogger("urllib3").setLevel(logging.WARNING)

@@ -116,7 +116,7 @@ class ServerEnv(BaseModel):
         alias="AGENT_ENGINE",
         description="Agent Engine instance ID for session and memory persistence",
     )
-    
+
     database_url: str | None = Field(
         default=None,
         alias="DATABASE_URL",
@@ -161,7 +161,8 @@ class ServerEnv(BaseModel):
         print(f"RELOAD_AGENTS:         {self.reload_agents}")
         print(f"AGENT_ENGINE:          {self.agent_engine}")
         print(f"DATABASE_URL:          {self.database_url}")
-        print(f"OPENROUTER_API_KEY:    {'********' if self.openrouter_api_key else None}")
+        masked_key = "********" if self.openrouter_api_key else None
+        print(f"OPENROUTER_KEY:        {masked_key}")
         print(f"HOST:                  {self.host}")
         print(f"PORT:                  {self.port}")
         print(f"ALLOW_ORIGINS:         {self.allow_origins}\n\n")
@@ -170,14 +171,17 @@ class ServerEnv(BaseModel):
     def agent_engine_uri(self) -> str | None:
         """Agent Engine URI with protocol prefix."""
         return f"agentengine://{self.agent_engine}" if self.agent_engine else None
-    
+
     @property
     def session_uri(self) -> str | None:
         """Session service URI (Database or Agent Engine)."""
         if self.database_url:
             # asyncpg requires 'ssl=require' instead of 'sslmode=require'
-            # Also removing channel_binding as it causes TypeError with current sqlalchemy/asyncpg setup
-            return self.database_url.replace("sslmode=require", "ssl=require").replace("&channel_binding=require", "")
+            # Also removing channel_binding as it causes TypeError with current
+            # sqlalchemy/asyncpg setup
+            return self.database_url.replace("sslmode=require", "ssl=require").replace(
+                "&channel_binding=require", ""
+            )
         return self.agent_engine_uri
 
     @property

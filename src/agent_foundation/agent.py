@@ -1,7 +1,7 @@
 """ADK LlmAgent configuration."""
 
-import os
 import logging
+import os
 
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
@@ -30,6 +30,7 @@ model = model_name
 if model_name.lower().startswith("openrouter/") or "/" in model_name:
     try:
         from google.adk.models import LiteLlm
+
         logger.info(f"Using LiteLlm for model: {model_name}")
         model = LiteLlm(model=model_name)
     except ImportError:
