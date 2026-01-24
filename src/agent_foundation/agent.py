@@ -1,6 +1,7 @@
 """ADK LlmAgent configuration."""
 
 import os
+import logging
 
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
@@ -16,14 +17,33 @@ from .prompt import (
 )
 from .tools import example_tool
 
+logger = logging.getLogger(__name__)
+
 logging_callbacks = LoggingCallbacks()
+
+# Determine model configuration
+model_name = os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-flash")
+model = model_name
+
+# Explicitly use LiteLlm for OpenRouter or other provider-prefixed models
+# that might not be auto-detected by ADK's registry.
+if model_name.lower().startswith("openrouter/") or "/" in model_name:
+    try:
+        from google.adk.models import LiteLlm
+        logger.info(f"Using LiteLlm for model: {model_name}")
+        model = LiteLlm(model=model_name)
+    except ImportError:
+        logger.warning(
+            "LiteLlm not available, falling back to string model name. "
+            "OpenRouter models may not work."
+        )
 
 root_agent = LlmAgent(
     name="example_agent",
     description=return_description_root(),
     before_agent_callback=logging_callbacks.before_agent,
     after_agent_callback=[logging_callbacks.after_agent, add_session_to_memory],
-    model=os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-flash"),
+    model=model,
     instruction=return_instruction_root(),
     tools=[PreloadMemoryTool(), example_tool],
     before_model_callback=logging_callbacks.before_model,
