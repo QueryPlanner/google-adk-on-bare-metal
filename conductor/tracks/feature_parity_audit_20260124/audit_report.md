@@ -31,8 +31,13 @@ The local codebase maintains full feature parity with the upstream `agent-founda
 
 ## Identified Gaps
 - **Missing Features:**
-    - **Multi-LLM Configuration:** `OPENROUTER_API_KEY` and other LiteLLM-related settings are missing from `ServerEnv` in `config.py`, despite being mentioned in documentation. `litellm` dependency verification is needed.
-- **Residual GCP Artifacts:** None found in `src/agent_foundation`. Infrastructure files (Terraform, etc.) are outside the scope of this audit but should be reviewed for removal if not already gone.
+    - **Multi-LLM Configuration:** `OPENROUTER_API_KEY` was missing and `agent.py` lacked explicit `LiteLlm` instantiation. **Status: Resolved.** Added key to `config.py` and updated `agent.py` to instantiate `LiteLlm` for provider-prefixed models.
+- **Residual GCP Artifacts:**
+    - **Status: Resolved.** All GCP-specific parameters (`GOOGLE_CLOUD_PROJECT`, etc.) and OpenTelemetry logic have been removed from `server.py` and `config.py`.
 
 ## Conclusion
-The repository is successfully adapted for bare-metal usage while retaining all original features. No further porting is required for feature parity.
+The repository has been successfully audited and adapted for bare-metal usage.
+1.  **Feature Parity:** All core agent capabilities are present.
+2.  **Gap Resolution:** Multi-LLM support is now explicitly configured.
+3.  **Bare Metal Adaptation:** GCP dependencies have been removed from the runtime configuration.
+4.  **Documentation:** `README.md` and `docs/` have been updated to reflect the self-hosted workflow.
