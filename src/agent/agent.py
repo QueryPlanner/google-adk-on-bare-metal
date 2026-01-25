@@ -56,7 +56,7 @@ root_agent = LlmAgent(
 
 # Optional App configs explicitly set to None for template documentation
 app = App(
-    name="agent_foundation",
+    name="agent",
     root_agent=root_agent,
     plugins=[
         GlobalInstructionPlugin(return_global_instruction),

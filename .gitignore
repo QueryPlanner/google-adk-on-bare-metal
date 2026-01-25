@@ -90,3 +90,4 @@ pip-wheel-metadata/
 # ---------------------------------------------------------------------------
 **/.adk/
 
+\n# Local conductor directory\nconductor/

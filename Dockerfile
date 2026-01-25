@@ -77,4 +77,4 @@ EXPOSE 8080
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Run the FastAPI server
-CMD ["python", "-m", "agent_foundation.server"]
+CMD ["python", "-m", "agent.server"]

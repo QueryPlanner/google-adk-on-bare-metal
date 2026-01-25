@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
-server = "agent_foundation.server:main"
+server = "agent.server:main"
 
 [dependency-groups]
 dev = [
@@ -44,7 +44,7 @@ requires = ["uv_build>=0.8.21,<0.9.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "agent_foundation"
+module-name = "agent"
 
 [tool.ruff]
 src = ["src"]
@@ -80,7 +80,7 @@ select = [
 [tool.mypy]
 python_version = "3.13"
 mypy_path = "src"
-packages = ["agent_foundation"]
+packages = ["agent"]
 exclude = ["init_template.py"]
 warn_return_any = true
 warn_unused_configs = true
@@ -100,10 +100,10 @@ show_error_codes = true
 source = ["src"]
 branch = true
 omit = [
-    "src/agent_foundation/**/__init__.py",
-    "src/agent_foundation/server.py",
-    "src/agent_foundation/**/agent.py",
-    "src/agent_foundation/utils/observability.py",
+    "src/agent/**/__init__.py",
+    "src/agent/server.py",
+    "src/agent/**/agent.py",
+    "src/agent/utils/observability.py",
 ]
 
 [tool.coverage.report]
