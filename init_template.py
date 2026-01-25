@@ -22,10 +22,10 @@ WHAT IT DOES:
     2. Validates repository name is kebab-case (enforces Python naming)
     3. Derives package name (my-agent → my_agent)
     4. Replaces template names with yours:
-       - agent_foundation → your_package_name
+       - agent → your_package_name
        - google-adk-on-bare-metal → your-repo-name
        - QueryPlanner/google-adk-on-bare-metal → your-owner/your-repo
-    5. Renames src/agent_foundation/ → src/{package_name}/
+    5. Renames src/agent/ → src/{package_name}/
     6. Updates imports, config, and docs in all files
     7. Updates GitHub Actions badge URLs
     8. Resets CODEOWNERS file (remove template owner)
@@ -69,7 +69,7 @@ from typing import NoReturn
 from pydantic import BaseModel, Field, ValidationError, computed_field
 
 # Original template names - update these when reusing in other template projects
-ORIGINAL_PACKAGE_NAME = "agent_foundation"
+ORIGINAL_PACKAGE_NAME = "agent"
 ORIGINAL_REPO_NAME = "google-adk-on-bare-metal"
 ORIGINAL_GITHUB_OWNER = "QueryPlanner"
 

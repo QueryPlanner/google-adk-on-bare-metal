@@ -7,7 +7,7 @@ import pytest
 # Import mock classes from conftest
 from conftest import MockState, MockToolContext
 
-from agent_foundation.tools import example_tool
+from agent.tools import example_tool
 
 
 class TestExampleTool:

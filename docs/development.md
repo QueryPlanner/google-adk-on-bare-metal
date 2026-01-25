@@ -8,9 +8,9 @@
 
 ### Repo layout
 
-- `src/agent_foundation/server.py`: Main platform entrypoint (FastAPI + ADK + Postgres)
-- `src/agent_foundation/agent.py`: Agent definition (exports `root_agent`)
-- `src/agent_foundation/utils/`: Shared helper modules (config + observability)
+- `src/agent/server.py`: Main platform entrypoint (FastAPI + ADK + Postgres)
+- `src/agent/agent.py`: Agent definition (exports `root_agent`)
+- `src/agent/utils/`: Shared helper modules (config + observability)
 - `tests/`: Unit and integration tests
 - `.env`: Configuration file (API keys, DB URL)
 
@@ -45,7 +45,7 @@ uv sync
 
 **Local Python:**
 ```bash
-uv run python -m agent_foundation.server
+uv run python -m agent.server
 ```
 
 **Docker Compose (Recommended for full stack):**
