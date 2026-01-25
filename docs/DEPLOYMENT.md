@@ -29,7 +29,7 @@ Instead of building locally, you can pull the pre-built image from GHCR.
     ```
 2.  **Pull the latest image**:
     ```bash
-    docker pull ghcr.io/<your-org-or-username>/google-adk-wo-gcp:main
+    docker pull ghcr.io/<your-org-or-username>/google-adk-on-bare-metal:main
     ```
 
 ### Automatic Deployment
@@ -39,7 +39,7 @@ To automate deployment, update your `compose.yaml` to use the GHCR image:
 ```yaml
 services:
   agent:
-    image: ghcr.io/<your-org-or-username>/google-adk-wo-gcp:main
+    image: ghcr.io/<your-org-or-username>/google-adk-on-bare-metal:main
     # ... rest of config
 ```
 
