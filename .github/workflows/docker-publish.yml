@@ -2,7 +2,7 @@ name: Docker Publish
 
 on:
   push:
-    branches: [ "main", "migration/port-agent-foundation" ]
+    branches: [ "main" ]
     tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ "main" ]
