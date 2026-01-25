@@ -16,6 +16,9 @@ services:
       - .env
     # Volumes are for hot-reloading and persisting artifacts.
     volumes:
-      - ./src:/app/src
+      - agent_artifacts:/app/src/.adk
     restart: always
     command: python -m agent_foundation.server
+
+volumes:
+  agent_artifacts:
