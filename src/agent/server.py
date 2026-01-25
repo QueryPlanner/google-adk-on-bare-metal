@@ -43,10 +43,20 @@ session_uri = env.session_uri
 if session_uri and session_uri.startswith("postgresql://"):
     session_uri = session_uri.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+# Define engine/pool settings for asyncpg connections
+session_db_kwargs = {
+    "pool_pre_ping": True,   # validate connections before use
+    "pool_recycle": 1800,    # seconds; recycle old connections
+    "pool_size": 5,
+    "max_overflow": 10,
+    "pool_timeout": 30,
+}
+
 # ADK fastapi app will set up OTel using resource attributes from env vars
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
     session_service_uri=session_uri,
+    session_db_kwargs=session_db_kwargs,
     artifact_service_uri=None,  # Explicitly None as GCP bucket not used
     # Memory service does not yet support Postgres scheme in ADK
     memory_service_uri=None,
