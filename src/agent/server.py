@@ -45,11 +45,11 @@ if session_uri and session_uri.startswith("postgresql://"):
 
 # Define engine/pool settings for asyncpg connections
 session_db_kwargs = {
-    "pool_pre_ping": True,   # validate connections before use
-    "pool_recycle": 1800,    # seconds; recycle old connections
-    "pool_size": 5,
-    "max_overflow": 10,
-    "pool_timeout": 30,
+    "pool_pre_ping": env.db_pool_pre_ping,
+    "pool_recycle": env.db_pool_recycle,
+    "pool_size": env.db_pool_size,
+    "max_overflow": env.db_max_overflow,
+    "pool_timeout": env.db_pool_timeout,
 }
 
 # ADK fastapi app will set up OTel using resource attributes from env vars

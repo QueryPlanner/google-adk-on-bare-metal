@@ -180,6 +180,26 @@ class TestServerEnv:
         assert "AGENT_NAME" in output
         assert "LOG_LEVEL" in output
 
+    def test_server_env_print_config_with_db(
+        self, valid_server_env: dict[str, str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test print_config outputs DB pool settings when DATABASE_URL is set."""
+        data = {
+            **valid_server_env,
+            "DATABASE_URL": "postgresql://user:pass@localhost/db",
+        }
+        env = ServerEnv.model_validate(data)
+        env.print_config()
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        assert "DB_POOL_PRE_PING" in output
+        assert "DB_POOL_RECYCLE" in output
+        assert "DB_POOL_SIZE" in output
+        assert "DB_MAX_OVERFLOW" in output
+        assert "DB_POOL_TIMEOUT" in output
+
     def test_server_env_ignores_extra_fields(
         self, valid_server_env: dict[str, str]
     ) -> None:

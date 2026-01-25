@@ -52,13 +52,18 @@
     *   `server.py`: FastAPI server entry point with OTel instrumentation.
     *   `prompt.py`: Manages agent prompts and instructions.
     *   `tools.py`: Helper tools for the agent.
-*   **`conductor/`**: Documentation and product definitions (Context7 format).
+
 *   **`tests/`**: Unit and integration tests.
 
 ### Code Quality
-*   **Linting & Formatting:** The project uses **Ruff** for strict linting and formatting. Ensure all code passes `uv run ruff check` before committing.
-*   **Type Safety:** **Mypy** is configured for strict type checking. All functions should have type hints.
-*   **Testing:** The project enforces **100% test coverage**. New features must include tests. run `uv run pytest --cov=src` to check coverage.
+Before creating a Pull Request, you **must** ensure all local checks pass. The CI pipeline will run these same checks:
+
+1.  **Format Code:** `uv run ruff format`
+2.  **Lint Code:** `uv run ruff check`
+3.  **Type Check:** `uv run mypy .`
+4.  **Run Tests:** `uv run pytest --cov=src`
+
+Ensure all steps pass locally to avoid CI failures.
 
 ### Deployment
 *   **Containerization:** The `Dockerfile` provides a multi-stage build optimized for production.
