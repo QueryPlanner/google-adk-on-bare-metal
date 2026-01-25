@@ -121,3 +121,14 @@ cp .env.example .env
 sudo systemctl status agent
 sudo journalctl -u agent -f
 ```
+
+## Troubleshooting
+
+### Permission Errors with Artifacts
+If you encounter `PermissionError: [Errno 13] Permission denied: '/app/src/.adk'` when running with Docker:
+1.  This usually happens because the container user (UID 1000) cannot write to the host volume mounted at `./src`.
+2.  **Fix:** Ensure you have rebuilt the image to include the latest permission fixes:
+    ```bash
+    docker compose up -d --build
+    ```
+3.  If that fails, ensure your host user has UID 1000 (run `id -u`).
