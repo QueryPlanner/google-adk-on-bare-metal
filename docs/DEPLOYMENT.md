@@ -2,6 +2,24 @@
 
 You can deploy this Agent Platform using **Docker** (easiest compatibility) or **Bare Metal** (lowest resource usage).
 
+## Option 0: Automated Server Setup (Infrastructure as Code)
+
+To prepare a fresh Ubuntu/Debian server for production, run the included `setup.sh` script. This script automates:
+1.  **System Updates**: Ensures the OS is patched.
+2.  **Dependencies**: Installs Docker, Docker Compose, Git, UFW, and Fail2Ban.
+3.  **Security**: Configures a basic firewall (UFW) allowing SSH (22), HTTP (80/443), and the Agent port (8080).
+4.  **Log Rotation**: Prevents Docker logs from filling up the disk.
+5.  **Dedicated User**: Creates an `agent-runner` user for secure operation.
+
+**Run on your server (as root):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/<your-username>/google-adk-on-bare-metal/main/setup.sh | bash
+# OR if you have cloned the repo:
+sudo ./setup.sh
+```
+
+---
+
 ## Prerequisites (Both Methods)
 
 1.  **Managed Postgres Database**: You need a connection string (e.g., from Neon, AWS RDS, Supabase).
