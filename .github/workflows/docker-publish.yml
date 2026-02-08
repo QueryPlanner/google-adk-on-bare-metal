@@ -87,8 +87,29 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # 1. Ensure project directory exists
+            if [ ! -d ~/google-adk-on-bare-metal ]; then
+              echo "Project directory not found. Cloning..."
+              git clone https://github.com/${{ github.repository }} ~/google-adk-on-bare-metal
+            fi
+
+            # 2. Navigate and Update Code
             cd ~/google-adk-on-bare-metal
             git pull
+
+            # 3. Inject Secrets into .env (Automated Configuration)
+            echo "Generating .env file from GitHub Secrets..."
+            cat <<EOF > .env
+            AGENT_NAME=production-agent
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+            LOG_LEVEL=INFO
+            PORT=8080
+            HOST=0.0.0.0
+            EOF
+
+            # 4. Deploy
             docker compose pull
             docker compose up -d
             docker image prune -f
