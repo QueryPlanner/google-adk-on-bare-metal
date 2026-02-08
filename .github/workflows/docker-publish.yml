@@ -104,6 +104,10 @@ jobs:
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
             GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+            ROOT_AGENT_MODEL=${{ secrets.ROOT_AGENT_MODEL }}
+            LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}
+            LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}
+            LANGFUSE_HOST=${{ secrets.LANGFUSE_HOST }}
             LOG_LEVEL=INFO
             PORT=8080
             HOST=0.0.0.0
