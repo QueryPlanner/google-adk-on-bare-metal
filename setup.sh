@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Prevent interactive prompts during package installation
+export DEBIAN_FRONTEND=noninteractive
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
