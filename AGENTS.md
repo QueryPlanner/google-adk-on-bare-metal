@@ -65,6 +65,24 @@ Before creating a Pull Request, you **must** ensure all local checks pass. The C
 
 Ensure all steps pass locally to avoid CI failures.
 
+### Testing Standards for AI Assistants
+When asked to write or modify tests, you **MUST** adhere to the following strict guidelines derived from the ADK philosophy:
+
+1.  **Real Code Over Mocks**:
+    *   **Do not mock** internal logic (e.g., `LlmAgent`, `Prompt`, `Tool`). Use the real classes.
+    *   **Only mock** external boundaries (e.g., `LiteLLM`, `asyncpg`, `Network APIs`).
+    *   **Why?** This ensures we test the integration of components, not just isolated units.
+
+2.  **Pytest Best Practices**:
+    *   Use **fixtures** (`conftest.py`) for setup/teardown.
+    *   Use **`@pytest.mark.parametrize`** for testing multiple inputs/outputs.
+    *   Use **`tmp_path` fixture** for any file system operations.
+    *   **Strict Mocking**: Always use `create_autospec(spec_set=True)` to ensure mocks match the actual API.
+
+3.  **Test Coverage**:
+    *   Every new feature **must** have a corresponding test.
+    *   Tests must cover both the "Happy Path" (success) and "Edge Cases" (failure/errors).
+
 ### Deployment
 *   **Containerization:** The `Dockerfile` provides a multi-stage build optimized for production.
 *   **CI/CD:** GitHub Actions workflows (`.github/workflows/`) handle testing, linting, and publishing Docker images to GHCR.
