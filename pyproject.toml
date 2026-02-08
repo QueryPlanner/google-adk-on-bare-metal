@@ -1,6 +1,6 @@
 [project]
 name = "google-adk-on-bare-metal"
-version = "0.0.1"
+version = "0.1.0"
 description = "Production-ready template for building and deploying AI agents using Google ADK, LiteLLM, and Postgres on self-hosted infrastructure"
 readme = "README.md"
 authors = [
