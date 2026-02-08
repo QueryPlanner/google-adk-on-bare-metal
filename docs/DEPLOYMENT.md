@@ -12,6 +12,10 @@ To prepare a fresh Ubuntu/Debian server for production, run the included `setup.
 5.  **Dedicated User**: Creates an `agent-runner` user for secure operation.
 
 **Run on your server (as root):**
+
+> [!WARNING]
+> Piping scripts directly from the internet to `bash` can be dangerous. Please review the script's contents before executing it to understand the actions it will perform on your server.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<your-username>/google-adk-on-bare-metal/main/setup.sh | bash
 # OR if you have cloned the repo:

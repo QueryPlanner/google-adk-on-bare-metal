@@ -34,13 +34,13 @@ apt-get update && apt-get upgrade -y
 
 # 2. Install Essential Tools
 log "Installing essential tools..."
-apt-get install -y 
-    curl 
-    git 
-    ufw 
-    fail2ban 
-    unzip 
-    jq 
+apt-get install -y \
+    curl \
+    git \
+    ufw \
+    fail2ban \
+    unzip \
+    jq \
     software-properties-common
 
 # 3. Install Docker & Docker Compose
