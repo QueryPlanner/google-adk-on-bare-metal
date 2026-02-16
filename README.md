@@ -54,7 +54,7 @@ Since we include CI/CD, every push to `main` builds a fresh image. On your serve
 
 ```bash
 # 1. Pull the latest image
-docker pull ghcr.io/queryplanner/google-adk-on-bare-metal:main
+docker pull ghcr.io/<your-github-username>/google-adk-on-bare-metal:main
 
 # 2. Start the service
 docker compose up -d
