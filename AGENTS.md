@@ -56,14 +56,14 @@
 *   **`tests/`**: Unit and integration tests.
 
 ### Code Quality
-Before creating a Pull Request, you **must** ensure all local checks pass. The CI pipeline will run these same checks:
+Before committing anything or creating a Pull Request, you **must** ensure all local checks pass. This includes running formatting, linting, type checks, and tests. The CI pipeline will run these same checks and fail if they are not satisfied:
 
 1.  **Format Code:** `uv run ruff format`
 2.  **Lint Code:** `uv run ruff check`
 3.  **Type Check:** `uv run mypy .`
 4.  **Run Tests:** `uv run pytest --cov=src`
 
-Ensure all steps pass locally to avoid CI failures.
+Ensure all steps pass locally before staging and committing files to avoid CI failures.
 
 ### Testing Standards for AI Assistants
 When asked to write or modify tests, you **MUST** adhere to the following strict guidelines derived from the ADK philosophy:

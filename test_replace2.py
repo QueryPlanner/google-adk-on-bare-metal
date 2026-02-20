@@ -1,4 +1,3 @@
-import re
 
 ORIGINAL_PACKAGE_NAME = "agent"
 ORIGINAL_REPO_NAME = "google-adk-on-bare-metal"
@@ -15,7 +14,7 @@ replacements = {
     ORIGINAL_GITHUB_OWNER.lower(): github_owner.lower(),
 }
 
-text = f"Visit https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/\nPackage: {ORIGINAL_PACKAGE_NAME}\nRepo: {ORIGINAL_REPO_NAME}\nOwner: {ORIGINAL_GITHUB_OWNER.lower()}"
+text = f"Visit https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/\nPackage: {ORIGINAL_PACKAGE_NAME}\nRepo: {ORIGINAL_REPO_NAME}\nOwner: {ORIGINAL_GITHUB_OWNER.lower()}"  # noqa: E501
 
 modified = text
 for old, new in replacements.items():

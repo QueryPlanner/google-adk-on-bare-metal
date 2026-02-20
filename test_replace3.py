@@ -1,4 +1,3 @@
-import re
 
 ORIGINAL_PACKAGE_NAME = "agent"
 ORIGINAL_REPO_NAME = "google-adk-on-bare-metal"
@@ -13,7 +12,7 @@ config_repo_name = repo_name
 config_package_name = package_name
 
 replacements = {
-    f"https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/": "<URL_PLACEHOLDER>",
+    f"https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/": "<URL_PLACEHOLDER>",  # noqa: E501
     ORIGINAL_PACKAGE_NAME: "<PKG_PLACEHOLDER>",
     ORIGINAL_REPO_NAME: "<REPO_PLACEHOLDER>",
     ORIGINAL_GITHUB_OWNER.lower(): "<OWNER_PLACEHOLDER>",
@@ -23,7 +22,7 @@ replacements = {
     "<OWNER_PLACEHOLDER>": config_github_owner.lower(),
 }
 
-text = f"Visit https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/\nPackage: {ORIGINAL_PACKAGE_NAME}\nRepo: {ORIGINAL_REPO_NAME}\nOwner: {ORIGINAL_GITHUB_OWNER.lower()}"
+text = f"Visit https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/\nPackage: {ORIGINAL_PACKAGE_NAME}\nRepo: {ORIGINAL_REPO_NAME}\nOwner: {ORIGINAL_GITHUB_OWNER.lower()}"  # noqa: E501
 
 modified = text
 for old, new in replacements.items():
