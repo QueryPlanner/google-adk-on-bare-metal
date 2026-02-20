@@ -519,6 +519,7 @@ def main() -> NoReturn:
             f"https://github.com/{ORIGINAL_GITHUB_OWNER}/{ORIGINAL_REPO_NAME}/": f"https://github.com/{config.github_owner}/{config.repo_name}/",
             ORIGINAL_PACKAGE_NAME: config.package_name,
             ORIGINAL_REPO_NAME: config.repo_name,
+            ORIGINAL_GITHUB_OWNER.lower(): config.github_owner.lower(),
         }
 
         # Files to update (paths relative to repo root)
@@ -528,6 +529,9 @@ def main() -> NoReturn:
             "pyproject.toml",
             "README.md",
             "tests/conftest.py",
+            ".github/workflows/docker-publish.yml",
+            "compose.yaml",
+            "systemd/agent.service",
         ]
 
         # Glob docker-compose files
