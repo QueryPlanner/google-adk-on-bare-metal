@@ -63,6 +63,8 @@ Before committing anything or creating a Pull Request, you **must** ensure all l
 3.  **Type Check:** `uv run mypy .`
 4.  **Run Tests:** `uv run pytest --cov=src`
 
+**⚠️ CRITICAL WARNING:** If you modify code to fix an error reported by one of these tools (e.g., adding type hints for `mypy` or `# noqa` comments for `ruff check`), you **MUST** re-run the entire suite of checks starting from `ruff format`. Fixing an error for one tool frequently breaks the rules of another (especially formatting). Do not commit until all checks pass consecutively without any further file modifications.
+
 Ensure all steps pass locally before staging and committing files to avoid CI failures.
 
 ### Testing Standards for AI Assistants

@@ -1,4 +1,3 @@
-
 ORIGINAL_PACKAGE_NAME = "agent"
 ORIGINAL_REPO_NAME = "google-adk-on-bare-metal"
 ORIGINAL_GITHUB_OWNER = "QueryPlanner"
