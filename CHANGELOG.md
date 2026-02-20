@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-02-20
+
+### Fixed
+- Prevent overlapping template replacements in `init_template.py`.
+- Mandated explicit sequence for CI checks in `AGENTS.md`.
+
+### Added
+- Added `.gemini/skills/google-adk/SKILL.md`.
+
 ## [0.1.0] - 2026-02-08
 
 ### Added
@@ -24,3 +33,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Resolved `ValueError: Missing key inputs argument` by ensuring API keys are properly injected into the container environment.
 - Addressed interactive prompt issues in `setup.sh` by setting `DEBIAN_FRONTEND=noninteractive`.
+\n[Unreleased]: https://github.com/QueryPlanner/google-adk-wo-gcp/compare/v0.1.1...HEAD\n[0.1.1]: https://github.com/QueryPlanner/google-adk-wo-gcp/compare/v0.1.0...v0.1.1\n[0.1.0]: https://github.com/QueryPlanner/google-adk-wo-gcp/releases/tag/v0.1.0
