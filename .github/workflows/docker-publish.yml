@@ -87,17 +87,22 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # 1. Ensure project directory exists
-            if [ ! -d ~/google-adk-on-bare-metal ]; then
+            # 1. Set dynamic project directory based on repository name
+            PROJECT_NAME="${{ github.event.repository.name }}"
+            PROJECT_DIR="\$HOME/$PROJECT_NAME"
+            IMAGE_NAME="ghcr.io/${{ github.repository }}:main"
+
+            # 2. Ensure project directory exists
+            if [ ! -d "$PROJECT_DIR" ]; then
               echo "Project directory not found. Cloning..."
-              git clone https://github.com/${{ github.repository }} ~/google-adk-on-bare-metal
+              git clone https://github.com/${{ github.repository }} "$PROJECT_DIR"
             fi
 
-            # 2. Navigate and Update Code
-            cd ~/google-adk-on-bare-metal
+            # 3. Navigate and Update Code
+            cd "$PROJECT_DIR"
             git pull
 
-            # 3. Inject Secrets into .env (Automated Configuration)
+            # 4. Inject Secrets into .env (Automated Configuration)
             echo "Generating .env file from GitHub Secrets..."
             cat <<EOF > .env
             AGENT_NAME=production-agent
@@ -113,7 +118,8 @@ jobs:
             HOST=0.0.0.0
             EOF
 
-            # 4. Deploy
+            # 5. Deploy with dynamic image
+            export IMAGE="$IMAGE_NAME"
             docker compose pull
             docker compose up -d
             docker image prune -f
