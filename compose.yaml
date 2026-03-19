@@ -1,6 +1,8 @@
 services:
   agent:
-    image: ghcr.io/queryplanner/google-adk-on-bare-metal:main
+    # Image is dynamically set during deployment via IMAGE env var
+    # Defaults to building locally if IMAGE is not specified
+    image: ${IMAGE:-agent}
     build: .
     ports:
       - "8080:8080"

@@ -4,8 +4,6 @@ on:
   push:
     branches: [ "main" ]
     tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ "main" ]
 
 env:
   REGISTRY: ghcr.io
@@ -39,7 +37,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log into registry ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -53,7 +50,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha,format=long
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
@@ -63,7 +59,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           # Multi-platform builds for Bare Metal (ARM64 for Pis, AMD64 for Cloud)
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
@@ -87,17 +83,22 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # 1. Ensure project directory exists
-            if [ ! -d ~/google-adk-on-bare-metal ]; then
+            # 1. Set dynamic project directory based on repository name
+            PROJECT_NAME="${{ github.event.repository.name }}"
+            PROJECT_DIR="\$HOME/$PROJECT_NAME"
+            IMAGE_NAME="ghcr.io/${{ github.repository }}:main"
+
+            # 2. Ensure project directory exists
+            if [ ! -d "$PROJECT_DIR" ]; then
               echo "Project directory not found. Cloning..."
-              git clone https://github.com/${{ github.repository }} ~/google-adk-on-bare-metal
+              git clone https://github.com/${{ github.repository }} "$PROJECT_DIR"
             fi
 
-            # 2. Navigate and Update Code
-            cd ~/google-adk-on-bare-metal
+            # 3. Navigate and Update Code
+            cd "$PROJECT_DIR"
             git pull
 
-            # 3. Inject Secrets into .env (Automated Configuration)
+            # 4. Inject Secrets into .env (Automated Configuration)
             echo "Generating .env file from GitHub Secrets..."
             cat <<EOF > .env
             AGENT_NAME=production-agent
@@ -113,7 +114,8 @@ jobs:
             HOST=0.0.0.0
             EOF
 
-            # 4. Deploy
+            # 5. Deploy with dynamic image
+            export IMAGE="$IMAGE_NAME"
             docker compose pull
             docker compose up -d
             docker image prune -f
