@@ -2,6 +2,7 @@
 
 This module provides tools and utilities for integrating mem0ai memory system
 with the Google ADK agent, enabling persistent memory across conversations.
+Uses LiteLLM/OpenRouter for LLM operations and local FastEmbed for embeddings.
 """
 
 import logging
@@ -21,16 +22,17 @@ def is_mem0_enabled() -> bool:
     """Check if mem0 is configured and available.
 
     Returns:
-        True if mem0 is configured and the client can be initialized.
+        True if mem0 is configured with an LLM API key and the client can be initialized.
     """
     global _mem0_enabled
 
     if _mem0_enabled is not None:
         return _mem0_enabled
 
-    api_key = os.getenv("MEM0_API_KEY")
-    if not api_key:
-        logger.debug("MEM0_API_KEY not set, mem0 integration disabled")
+    # Check for MEM0_LLM_API_KEY or fall back to OPENROUTER_API_KEY
+    llm_api_key = os.getenv("MEM0_LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    if not llm_api_key:
+        logger.debug("Neither MEM0_LLM_API_KEY nor OPENROUTER_API_KEY set, mem0 integration disabled")
         _mem0_enabled = False
         return False
 
@@ -47,43 +49,66 @@ def is_mem0_enabled() -> bool:
 def get_mem0_client() -> Any:
     """Get or create the mem0 client instance.
 
+    Configures mem0 with:
+    - LiteLLM for LLM operations (OpenRouter or other providers)
+    - FastEmbed for local embeddings (no API key needed)
+    - Qdrant for local vector storage
+
     Returns:
         The mem0 client instance.
 
     Raises:
         ImportError: If mem0ai is not installed.
-        ValueError: If MEM0_API_KEY is not set.
+        ValueError: If no LLM API key is configured.
     """
     global _mem0_client
 
     if _mem0_client is not None:
         return _mem0_client
 
-    api_key = os.getenv("MEM0_API_KEY")
-    if not api_key:
-        raise ValueError("MEM0_API_KEY environment variable is required")
+    # Get LLM API key (prefer MEM0_LLM_API_KEY, fall back to OPENROUTER_API_KEY)
+    llm_api_key = os.getenv("MEM0_LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    if not llm_api_key:
+        raise ValueError(
+            "MEM0_LLM_API_KEY or OPENROUTER_API_KEY environment variable is required"
+        )
+
+    # Get LLM model (default to OpenRouter Gemini)
+    llm_model = os.getenv("MEM0_LLM_MODEL", "openrouter/google/gemini-2.0-flash-001")
 
     try:
         from mem0 import Memory
 
+        # Configure mem0 with LiteLLM, FastEmbed, and Qdrant
         config: dict[str, Any] = {
             "version": "v1.1",
-        }
-
-        # Optional: configure mem0 with custom settings
-        collection_name = os.getenv("MEM0_COLLECTION_NAME")
-        if collection_name:
-            config["vector_store"] = {
+            "llm": {
+                "provider": "litellm",
+                "config": {
+                    "model": llm_model,
+                    "api_key": llm_api_key,
+                    "temperature": float(os.getenv("MEM0_LLM_TEMPERATURE", "0.1")),
+                    "max_tokens": int(os.getenv("MEM0_LLM_MAX_TOKENS", "1000")),
+                },
+            },
+            "embedder": {
+                "provider": "fastembed",
+                "config": {
+                    "model": "thenlper/gte-large",
+                },
+            },
+            "vector_store": {
                 "provider": "qdrant",
                 "config": {
-                    "collection_name": collection_name,
+                    "collection_name": os.getenv("MEM0_COLLECTION_NAME", "agent_memories"),
                     "host": os.getenv("MEM0_QDRANT_HOST", "localhost"),
                     "port": int(os.getenv("MEM0_QDRANT_PORT", "6333")),
                 },
-            }
+            },
+        }
 
         _mem0_client = Memory(config)
-        logger.info("mem0 client initialized successfully")
+        logger.info(f"mem0 client initialized with LiteLLM model: {llm_model}")
         return _mem0_client
 
     except ImportError as e:
