@@ -23,6 +23,7 @@ dependencies = [
     "greenlet>=3.0.0",
     "langfuse>=3.12.0",
     "openinference-instrumentation-google-adk>=0.1.8",
+    "mem0ai>=0.1.0",
 ]
 
 [project.scripts]

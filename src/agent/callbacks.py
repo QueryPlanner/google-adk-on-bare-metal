@@ -9,10 +9,13 @@ import logging
 from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
+from google.genai import types
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import ToolContext
 from google.adk.tools.base_tool import BaseTool
+
+from .mem0_integration import get_mem0_manager, is_mem0_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,87 @@ async def add_session_to_memory(callback_context: CallbackContext) -> None:
         logger.warning(e)
     except Exception as e:
         logger.warning(f"Failed to add session to memory: {type(e).__name__}: {e}")
+
+    return None
+
+
+async def add_memories_to_context(
+    callback_context: CallbackContext,
+    llm_request: LlmRequest,
+) -> None:
+    """Inject relevant memories from mem0 into the LLM context.
+
+    This callback retrieves memories relevant to the user's current message
+    and injects them into the prompt context, allowing the agent to have
+    awareness of past interactions and user preferences.
+
+    Args:
+        callback_context: The callback context with access to invocation context.
+        llm_request: The LLM request to potentially modify with memory context.
+    """
+    if not is_mem0_enabled():
+        logger.debug("mem0 not enabled, skipping memory injection")
+        return None
+
+    # Extract the user's message from the request
+    user_message = ""
+    for content in reversed(llm_request.contents):
+        if content.role == "user" and content.parts:
+            for part in content.parts:
+                if part.text:
+                    user_message = part.text
+                    break
+        if user_message:
+            break
+
+    if not user_message:
+        logger.debug("No user message found, skipping memory injection")
+        return None
+
+    try:
+        manager = get_mem0_manager()
+
+        # Get user_id from state if available
+        user_id = None
+        if callback_context.state:
+            user_id = callback_context.state.get("user_id")
+
+        # Search for relevant memories
+        result = manager.search_memory(
+            query=user_message,
+            user_id=user_id,
+            limit=int(__import__("os").getenv("MEM0_SEARCH_LIMIT", "5")),
+        )
+
+        memories = result.get("memories", [])
+        if not memories:
+            logger.debug("No relevant memories found")
+            return None
+
+        # Format memories for injection
+        memory_text = "\n".join(
+            f"- {m.get('memory', str(m))}" for m in memories if m
+        )
+
+        # Create a system instruction with memories
+        memory_content = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    text=f"[Context from memory - use this to personalize your response]\n{memory_text}"
+                )
+            ],
+        )
+
+        # Insert memory context at the beginning of the conversation
+        llm_request.contents.insert(0, memory_content)
+
+        logger.info(
+            f"Injected {len(memories)} memories into context for user message"
+        )
+
+    except Exception as e:
+        logger.warning(f"Failed to inject memories into context: {e}")
 
     return None
 
