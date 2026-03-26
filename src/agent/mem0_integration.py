@@ -66,20 +66,33 @@ def get_mem0_client() -> Any:
     if _mem0_client is not None:
         return _mem0_client
 
-    # Get LLM API key (prefer MEM0_LLM_API_KEY, fall back to OPENROUTER_API_KEY)
+    logger.debug("Initializing mem0 client...")
+
+    # Step 1: Fetch API key
     llm_api_key = os.getenv("MEM0_LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     if not llm_api_key:
         raise ValueError(
             "MEM0_LLM_API_KEY or OPENROUTER_API_KEY environment variable is required"
         )
+    api_key_source = "MEM0_LLM_API_KEY" if os.getenv("MEM0_LLM_API_KEY") else "OPENROUTER_API_KEY"
+    logger.debug(f"API key source: {api_key_source}")
 
-    # Get LLM model (default to OpenRouter Gemini)
+    # Step 2: Resolve LLM model
     llm_model = os.getenv("MEM0_LLM_MODEL", "openrouter/google/gemini-2.0-flash-001")
+    logger.debug(f"LLM model: {llm_model}")
+
+    # Step 3: Fetch additional config values
+    llm_temperature = float(os.getenv("MEM0_LLM_TEMPERATURE", "0.1"))
+    llm_max_tokens = int(os.getenv("MEM0_LLM_MAX_TOKENS", "1000"))
+    collection_name = os.getenv("MEM0_COLLECTION_NAME", "agent_memories")
+    qdrant_host = os.getenv("MEM0_QDRANT_HOST", "localhost")
+    qdrant_port = int(os.getenv("MEM0_QDRANT_PORT", "6333"))
+    logger.debug(f"Qdrant config: {qdrant_host}:{qdrant_port}, collection: {collection_name}")
 
     try:
         from mem0 import Memory
 
-        # Configure mem0 with LiteLLM, FastEmbed, and Qdrant
+        # Step 4: Build configuration
         config: dict[str, Any] = {
             "version": "v1.1",
             "llm": {
@@ -87,8 +100,8 @@ def get_mem0_client() -> Any:
                 "config": {
                     "model": llm_model,
                     "api_key": llm_api_key,
-                    "temperature": float(os.getenv("MEM0_LLM_TEMPERATURE", "0.1")),
-                    "max_tokens": int(os.getenv("MEM0_LLM_MAX_TOKENS", "1000")),
+                    "temperature": llm_temperature,
+                    "max_tokens": llm_max_tokens,
                 },
             },
             "embedder": {
@@ -100,15 +113,17 @@ def get_mem0_client() -> Any:
             "vector_store": {
                 "provider": "qdrant",
                 "config": {
-                    "collection_name": os.getenv("MEM0_COLLECTION_NAME", "agent_memories"),
-                    "host": os.getenv("MEM0_QDRANT_HOST", "localhost"),
-                    "port": int(os.getenv("MEM0_QDRANT_PORT", "6333")),
+                    "collection_name": collection_name,
+                    "host": qdrant_host,
+                    "port": qdrant_port,
                 },
             },
         }
+        logger.debug("Configuration built, creating Memory instance...")
 
+        # Step 5: Initialize client
         _mem0_client = Memory(config)
-        logger.info(f"mem0 client initialized with LiteLLM model: {llm_model}")
+        logger.info(f"mem0 client initialized successfully with model: {llm_model}")
         return _mem0_client
 
     except ImportError as e:

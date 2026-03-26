@@ -6,6 +6,7 @@ memory persistence.
 """
 
 import logging
+import os
 from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
@@ -85,7 +86,7 @@ async def add_memories_to_context(
         result = manager.search_memory(
             query=user_message,
             user_id=user_id,
-            limit=int(__import__("os").getenv("MEM0_SEARCH_LIMIT", "5")),
+            limit=int(os.getenv("MEM0_SEARCH_LIMIT", "5")),
         )
 
         memories = result.get("memories", [])
