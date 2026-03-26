@@ -32,7 +32,9 @@ def is_mem0_enabled() -> bool:
     # Check for MEM0_LLM_API_KEY or fall back to OPENROUTER_API_KEY
     llm_api_key = os.getenv("MEM0_LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     if not llm_api_key:
-        logger.debug("Neither MEM0_LLM_API_KEY nor OPENROUTER_API_KEY set, mem0 integration disabled")
+        logger.debug(
+            "Neither MEM0_LLM_API_KEY nor OPENROUTER_API_KEY set, mem0 integration disabled"
+        )
         _mem0_enabled = False
         return False
 
@@ -74,7 +76,9 @@ def get_mem0_client() -> Any:
         raise ValueError(
             "MEM0_LLM_API_KEY or OPENROUTER_API_KEY environment variable is required"
         )
-    api_key_source = "MEM0_LLM_API_KEY" if os.getenv("MEM0_LLM_API_KEY") else "OPENROUTER_API_KEY"
+    api_key_source = (
+        "MEM0_LLM_API_KEY" if os.getenv("MEM0_LLM_API_KEY") else "OPENROUTER_API_KEY"
+    )
     logger.debug(f"API key source: {api_key_source}")
 
     # Step 2: Resolve LLM model
@@ -87,7 +91,9 @@ def get_mem0_client() -> Any:
     collection_name = os.getenv("MEM0_COLLECTION_NAME", "agent_memories")
     qdrant_host = os.getenv("MEM0_QDRANT_HOST", "localhost")
     qdrant_port = int(os.getenv("MEM0_QDRANT_PORT", "6333"))
-    logger.debug(f"Qdrant config: {qdrant_host}:{qdrant_port}, collection: {collection_name}")
+    logger.debug(
+        f"Qdrant config: {qdrant_host}:{qdrant_port}, collection: {collection_name}"
+    )
 
     try:
         from mem0 import Memory
@@ -274,7 +280,9 @@ class Mem0Manager:
 
         try:
             results = self.client.get_all(user_id=user_id or self._user_id)
-            logger.debug(f"Retrieved {len(results) if isinstance(results, list) else 0} memories")
+            logger.debug(
+                f"Retrieved {len(results) if isinstance(results, list) else 0} memories"
+            )
             return {
                 "status": "success",
                 "memories": results if isinstance(results, list) else [],
