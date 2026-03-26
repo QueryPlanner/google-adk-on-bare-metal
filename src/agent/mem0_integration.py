@@ -98,7 +98,7 @@ def get_mem0_client() -> Any:
     )
 
     try:
-        from mem0 import Memory  # type: ignore[import]
+        from mem0 import Memory  # type: ignore[import-untyped]
 
         # Step 4: Build configuration
         config: dict[str, Any] = {
