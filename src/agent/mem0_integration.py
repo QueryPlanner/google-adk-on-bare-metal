@@ -98,7 +98,7 @@ def get_mem0_client() -> Any:
     )
 
     try:
-        from mem0 import Memory
+        from mem0 import Memory  # type: ignore[import-not-found]
 
         # Step 4: Build configuration
         config: dict[str, Any] = {
@@ -159,7 +159,7 @@ class Mem0Manager:
                 If not provided, uses MEM0_USER_ID env var or defaults to "default".
         """
         self._client: Any = None
-        self._user_id = user_id or os.getenv("MEM0_USER_ID", "default")
+        self._user_id: str = user_id or os.getenv("MEM0_USER_ID", "default")
 
     @property
     def client(self) -> Any:
