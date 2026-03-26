@@ -22,7 +22,8 @@ def is_mem0_enabled() -> bool:
     """Check if mem0 is configured and available.
 
     Returns:
-        True if mem0 is configured with an LLM API key and the client can be initialized.
+        True if mem0 is configured with an LLM API key and the client can
+        be initialized.
     """
     global _mem0_enabled
 
@@ -33,7 +34,8 @@ def is_mem0_enabled() -> bool:
     llm_api_key = os.getenv("MEM0_LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     if not llm_api_key:
         logger.debug(
-            "Neither MEM0_LLM_API_KEY nor OPENROUTER_API_KEY set, mem0 integration disabled"
+            "Neither MEM0_LLM_API_KEY nor OPENROUTER_API_KEY set, "
+            "mem0 integration disabled"
         )
         _mem0_enabled = False
         return False
@@ -154,7 +156,7 @@ class Mem0Manager:
 
         Args:
             user_id: Optional default user ID for memory operations.
-                     If not provided, uses MEM0_USER_ID env var or defaults to "default".
+                If not provided, uses MEM0_USER_ID env var or defaults to "default".
         """
         self._client: Any = None
         self._user_id = user_id or os.getenv("MEM0_USER_ID", "default")

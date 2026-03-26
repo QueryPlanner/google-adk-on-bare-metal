@@ -10,11 +10,11 @@ import os
 from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
-from google.genai import types
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import ToolContext
 from google.adk.tools.base_tool import BaseTool
+from google.genai import types
 
 from .mem0_integration import get_mem0_manager, is_mem0_enabled
 
@@ -95,16 +95,17 @@ async def add_memories_to_context(
             return None
 
         # Format memories for injection
-        memory_text = "\n".join(
-            f"- {m.get('memory', str(m))}" for m in memories if m
-        )
+        memory_text = "\n".join(f"- {m.get('memory', str(m))}" for m in memories if m)
 
         # Create a system instruction with memories
         memory_content = types.Content(
             role="user",
             parts=[
                 types.Part(
-                    text=f"[Context from memory - use this to personalize your response]\n{memory_text}"
+                    text=(
+                        "[Context from memory - use this to personalize your "
+                        f"response]\n{memory_text}"
+                    )
                 )
             ],
         )
@@ -112,9 +113,7 @@ async def add_memories_to_context(
         # Insert memory context at the beginning of the conversation
         llm_request.contents.insert(0, memory_content)
 
-        logger.info(
-            f"Injected {len(memories)} memories into context for user message"
-        )
+        logger.info(f"Injected {len(memories)} memories into context for user message")
 
     except Exception as e:
         logger.warning(f"Failed to inject memories into context: {e}")
