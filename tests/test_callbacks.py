@@ -212,7 +212,9 @@ class TestAddMemoriesToContext:
     """Tests for the add_memories_to_context callback function."""
 
     @pytest.mark.asyncio
-    async def test_skips_when_mem0_disabled(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_skips_when_mem0_disabled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test that callback skips when mem0 is not enabled."""
         caplog.set_level(logging.DEBUG)
 
@@ -252,7 +254,9 @@ class TestAddMemoriesToContext:
             assert "No user message found, skipping memory injection" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_injects_memories_found(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_injects_memories_found(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test that callback injects memories when found."""
         caplog.set_level(logging.INFO)
 
@@ -278,7 +282,9 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
             patch.dict("os.environ", {"MEM0_SEARCH_LIMIT": "5"}),
         ):
-            context = MockMemoriesCallbackContext(state=MockState({"user_id": "test_user"}))
+            context = MockMemoriesCallbackContext(
+                state=MockState({"user_id": "test_user"})
+            )
             result = await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
@@ -336,7 +342,9 @@ class TestAddMemoriesToContext:
         )
 
         mock_manager = MagicMock()
-        mock_manager.search_memory.side_effect = RuntimeError("Database connection failed")
+        mock_manager.search_memory.side_effect = RuntimeError(
+            "Database connection failed"
+        )
 
         with (
             patch("agent.callbacks.is_mem0_enabled", return_value=True),
@@ -351,7 +359,9 @@ class TestAddMemoriesToContext:
             assert "Failed to inject memories into context" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_uses_custom_search_limit(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_uses_custom_search_limit(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test that callback uses MEM0_SEARCH_LIMIT from environment."""
         caplog.set_level(logging.INFO)
 
@@ -413,7 +423,9 @@ class TestAddMemoriesToContext:
             assert call_kwargs["query"] == "Second message"
 
     @pytest.mark.asyncio
-    async def test_handles_user_id_from_state(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_handles_user_id_from_state(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test that callback extracts user_id from state if available."""
         caplog.set_level(logging.INFO)
 
@@ -430,7 +442,9 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.is_mem0_enabled", return_value=True),
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
         ):
-            context = MockMemoriesCallbackContext(state=MockState({"user_id": "user_abc"}))
+            context = MockMemoriesCallbackContext(
+                state=MockState({"user_id": "user_abc"})
+            )
             await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
@@ -474,7 +488,9 @@ class TestAddMemoriesToContext:
             assert call_kwargs["query"] == "Valid text"
 
     @pytest.mark.asyncio
-    async def test_formats_memories_correctly(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_formats_memories_correctly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Test that memories are formatted correctly in injected content."""
         caplog.set_level(logging.INFO)
 
