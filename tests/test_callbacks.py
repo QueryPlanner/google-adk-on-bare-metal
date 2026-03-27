@@ -222,11 +222,10 @@ class TestAddMemoriesToContext:
             context = MockMemoriesCallbackContext()
             request = MockLlmRequestWithContents()
 
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
-            assert result is None
             assert "mem0 not enabled, skipping memory injection" in caplog.text
 
     @pytest.mark.asyncio
@@ -246,11 +245,10 @@ class TestAddMemoriesToContext:
 
         with patch("agent.callbacks.is_mem0_enabled", return_value=True):
             context = MockMemoriesCallbackContext()
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
-            assert result is None
             assert "No user message found, skipping memory injection" in caplog.text
 
     @pytest.mark.asyncio
@@ -285,18 +283,21 @@ class TestAddMemoriesToContext:
             context = MockMemoriesCallbackContext(
                 state=MockState({"user_id": "test_user"})
             )
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
-            assert result is None
             assert len(request.contents) == 2  # Original + injected memory
             # Check the injected content is at the beginning
             injected = request.contents[0]
             assert isinstance(injected, types.Content)
             assert injected.role == "user"
-            assert "Context from memory" in injected.parts[0].text
-            assert "User likes Python" in injected.parts[0].text
+            assert injected.parts is not None
+            assert len(injected.parts) > 0
+            parts_text = injected.parts[0].text
+            assert parts_text is not None
+            assert "Context from memory" in parts_text
+            assert "User likes Python" in parts_text
             assert "Injected 2 memories" in caplog.text
 
     @pytest.mark.asyncio
@@ -320,11 +321,10 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
         ):
             context = MockMemoriesCallbackContext()
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
-            assert result is None
             assert len(request.contents) == 1  # Only original content
             assert "No relevant memories found" in caplog.text
 
@@ -351,11 +351,10 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
         ):
             context = MockMemoriesCallbackContext()
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
-            assert result is None
             assert "Failed to inject memories into context" in caplog.text
 
     @pytest.mark.asyncio
