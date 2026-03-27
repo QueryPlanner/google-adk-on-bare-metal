@@ -18,6 +18,80 @@ _mem0_client: Any = None
 _mem0_enabled: bool | None = None
 
 
+def _build_mem0_config(
+    llm_api_key: str,
+    llm_model: str,
+    llm_temperature: float,
+    llm_max_tokens: int,
+    embedder_model: str,
+    collection_name: str,
+    qdrant_path: str | None,
+    qdrant_host: str | None,
+    qdrant_port: int | None,
+) -> dict[str, Any]:
+    """Build the mem0 configuration dictionary.
+
+    Supports two modes:
+    - Embedded on-disk mode (default): Uses local file path for persistence
+    - Remote server mode: Connects to a separate Qdrant server
+
+    Keeping this in one place makes it easier to support multiple mem0
+    constructor styles without duplicating the same nested config.
+    """
+    # Build vector store config based on mode
+    if qdrant_host and qdrant_port:
+        # Remote server mode - connect to external Qdrant
+        vector_store_config: dict[str, Any] = {
+            "collection_name": collection_name,
+            "host": qdrant_host,
+            "port": qdrant_port,
+        }
+    else:
+        # Embedded on-disk mode (default) - no separate service needed
+        vector_store_config = {
+            "collection_name": collection_name,
+            "path": qdrant_path or "./data/qdrant",
+            "on_disk": True,
+        }
+
+    return {
+        "version": "v1.1",
+        "llm": {
+            "provider": "litellm",
+            "config": {
+                "model": llm_model,
+                "api_key": llm_api_key,
+                "temperature": llm_temperature,
+                "max_tokens": llm_max_tokens,
+            },
+        },
+        "embedder": {
+            "provider": "fastembed",
+            "config": {
+                "model": embedder_model,
+            },
+        },
+        "vector_store": {
+            "provider": "qdrant",
+            "config": vector_store_config,
+        },
+    }
+
+
+def _create_mem0_memory_client(memory_class: Any, config: dict[str, Any]) -> Any:
+    """Create a mem0 Memory client across old and new mem0 versions.
+
+    Newer mem0 releases expect `Memory.from_config(config)` or a typed
+    `MemoryConfig`, while older releases accepted `Memory(config)` directly.
+    Try the modern API first and only fall back when needed.
+    """
+    from_config = getattr(memory_class, "from_config", None)
+    if callable(from_config):
+        return from_config(config)
+
+    return memory_class(config)
+
+
 def is_mem0_enabled() -> bool:
     """Check if mem0 is configured and available.
 
@@ -90,53 +164,67 @@ def get_mem0_client() -> Any:
     # Step 3: Fetch additional config values
     llm_temperature = float(os.getenv("MEM0_LLM_TEMPERATURE", "0.1"))
     llm_max_tokens = int(os.getenv("MEM0_LLM_MAX_TOKENS", "1000"))
+    embedder_model = os.getenv("MEM0_EMBEDDER_MODEL", "BAAI/bge-small-en-v1.5")
     collection_name = os.getenv("MEM0_COLLECTION_NAME", "agent_memories")
-    qdrant_host = os.getenv("MEM0_QDRANT_HOST", "localhost")
-    qdrant_port = int(os.getenv("MEM0_QDRANT_PORT", "6333"))
-    logger.debug(
-        f"Qdrant config: {qdrant_host}:{qdrant_port}, collection: {collection_name}"
+
+    # Qdrant configuration - support both embedded and server modes
+    # Embedded mode (default): uses on-disk storage at qdrant_path
+    # Server mode: connects to external Qdrant at qdrant_host:qdrant_port
+    qdrant_path = os.getenv("MEM0_QDRANT_PATH", "./data/qdrant")
+    qdrant_host = os.getenv("MEM0_QDRANT_HOST", None)
+    qdrant_port = (
+        int(os.getenv("MEM0_QDRANT_PORT", "0"))
+        if os.getenv("MEM0_QDRANT_PORT")
+        else None
     )
+
+    if qdrant_host and qdrant_port:
+        logger.debug(
+            "Qdrant server mode: %s:%s, collection: %s, embedder: %s",
+            qdrant_host,
+            qdrant_port,
+            collection_name,
+            embedder_model,
+        )
+    else:
+        logger.debug(
+            "Qdrant embedded mode: path=%s, collection: %s, embedder: %s",
+            qdrant_path,
+            collection_name,
+            embedder_model,
+        )
 
     try:
         from mem0 import Memory  # type: ignore[import-untyped]
+    except ImportError as e:
+        raise ImportError(
+            "mem0ai is not installed. Install it with: pip install mem0ai"
+        ) from e
 
+    try:
         # Step 4: Build configuration
-        config: dict[str, Any] = {
-            "version": "v1.1",
-            "llm": {
-                "provider": "litellm",
-                "config": {
-                    "model": llm_model,
-                    "api_key": llm_api_key,
-                    "temperature": llm_temperature,
-                    "max_tokens": llm_max_tokens,
-                },
-            },
-            "embedder": {
-                "provider": "fastembed",
-                "config": {
-                    "model": "thenlper/gte-large",
-                },
-            },
-            "vector_store": {
-                "provider": "qdrant",
-                "config": {
-                    "collection_name": collection_name,
-                    "host": qdrant_host,
-                    "port": qdrant_port,
-                },
-            },
-        }
+        config = _build_mem0_config(
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            llm_temperature=llm_temperature,
+            llm_max_tokens=llm_max_tokens,
+            embedder_model=embedder_model,
+            collection_name=collection_name,
+            qdrant_path=qdrant_path,
+            qdrant_host=qdrant_host,
+            qdrant_port=qdrant_port,
+        )
         logger.debug("Configuration built, creating Memory instance...")
 
         # Step 5: Initialize client
-        _mem0_client = Memory(config)
+        _mem0_client = _create_mem0_memory_client(Memory, config)
         logger.info(f"mem0 client initialized successfully with model: {llm_model}")
         return _mem0_client
 
     except ImportError as e:
         raise ImportError(
-            "mem0ai is not installed. Install it with: pip install mem0ai"
+            "mem0 dependencies are incomplete. Install the required extras, "
+            "for example: pip install mem0ai fastembed"
         ) from e
 
 
@@ -210,10 +298,21 @@ class Mem0Manager:
                 metadata=metadata,
             )
             logger.debug(f"Saved memory: {result}")
+
+            # Mem0 v1.x returns {"results": [...]} for add operations
+            memory_id = None
+            if isinstance(result, dict):
+                if "results" in result and result["results"]:
+                    # Extract ID from the first result
+                    memory_id = result["results"][0].get("id")
+                elif "id" in result:
+                    # Fallback for older response format
+                    memory_id = result.get("id")
+
             return {
                 "status": "success",
                 "message": "Memory saved successfully",
-                "memory_id": result.get("id") if isinstance(result, dict) else None,
+                "memory_id": memory_id,
             }
         except Exception as e:
             logger.error(f"Failed to save memory: {e}")
@@ -246,15 +345,25 @@ class Mem0Manager:
             }
 
         try:
-            results = self.client.search(
+            result = self.client.search(
                 query,
                 user_id=user_id or self._user_id,
                 limit=limit,
             )
-            logger.debug(f"Search results: {results}")
+            logger.debug(f"Search results: {result}")
+
+            # Mem0 v1.x returns {"results": [...]} for search operations
+            if isinstance(result, dict) and "results" in result:
+                memories = result["results"]
+            elif isinstance(result, list):
+                # Fallback for older response format
+                memories = result
+            else:
+                memories = []
+
             return {
                 "status": "success",
-                "memories": results if isinstance(results, list) else [],
+                "memories": memories,
             }
         except Exception as e:
             logger.error(f"Failed to search memories: {e}")
@@ -281,13 +390,22 @@ class Mem0Manager:
             }
 
         try:
-            results = self.client.get_all(user_id=user_id or self._user_id)
-            logger.debug(
-                f"Retrieved {len(results) if isinstance(results, list) else 0} memories"
-            )
+            result = self.client.get_all(user_id=user_id or self._user_id)
+            logger.debug(f"Get all results: {result}")
+
+            # Mem0 v1.x returns {"results": [...]} for get_all operations
+            if isinstance(result, dict) and "results" in result:
+                memories = result["results"]
+            elif isinstance(result, list):
+                # Fallback for older response format
+                memories = result
+            else:
+                memories = []
+
+            logger.debug(f"Retrieved {len(memories)} memories")
             return {
                 "status": "success",
-                "memories": results if isinstance(results, list) else [],
+                "memories": memories,
             }
         except Exception as e:
             logger.error(f"Failed to get memories: {e}")
