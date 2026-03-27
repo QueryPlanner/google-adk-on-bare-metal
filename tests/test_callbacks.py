@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import MockMemoryCallbackContext, MockState
@@ -593,7 +593,7 @@ class TestAddMemoriesToContext:
     async def test_handles_part_with_empty_string_text(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Test that callback handles parts with empty string text before finding valid text."""
+        """Test callback handles parts with empty string text before valid text."""
         caplog.set_level(logging.DEBUG)
 
         # Create part with empty string text
@@ -616,7 +616,7 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
         ):
             context = MockMemoriesCallbackContext()
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
@@ -628,7 +628,7 @@ class TestAddMemoriesToContext:
     async def test_handles_all_parts_without_truthy_text(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Test that callback handles user content where all parts have falsy text values."""
+        """Test callback handles user content where all parts have falsy text values."""
         caplog.set_level(logging.DEBUG)
 
         # Create parts with only falsy text values (None, empty string, 0, False)
@@ -658,7 +658,7 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
         ):
             context = MockMemoriesCallbackContext()
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
@@ -670,7 +670,7 @@ class TestAddMemoriesToContext:
     async def test_handles_last_user_content_with_all_falsy_parts(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Test that callback handles last user content (first in reversed) with all falsy parts."""
+        """Test callback handles last user content (first in reversed) with falsy."""
         caplog.set_level(logging.DEBUG)
 
         # Create parts with only falsy text values
@@ -697,7 +697,7 @@ class TestAddMemoriesToContext:
             patch("agent.callbacks.get_mem0_manager", return_value=mock_manager),
         ):
             context = MockMemoriesCallbackContext()
-            result = await add_memories_to_context(
+            await add_memories_to_context(
                 cast(CallbackContext, context), cast(Any, request)
             )
 
