@@ -51,7 +51,7 @@ jobs:
         run: uv run mypy .
 
       - name: Run pytest with coverage
-        run: uv run pytest --cov=src --cov-report=xml
+        run: uv run pytest --cov=src --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
