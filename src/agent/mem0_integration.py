@@ -5,8 +5,10 @@ with the Google ADK agent, enabling persistent memory across conversations.
 Uses LiteLLM/OpenRouter for LLM operations and local FastEmbed for embeddings.
 """
 
+import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from google.adk.tools import ToolContext
@@ -17,6 +19,71 @@ logger = logging.getLogger(__name__)
 _mem0_client: Any = None
 _mem0_enabled: bool | None = None
 
+_DEFAULT_EMBEDDER_MODEL = "BAAI/bge-small-en-v1.5"
+_DEFAULT_QDRANT_PATH = "./data/qdrant"
+_FASTEMBED_MODEL_DIMS = {
+    "BAAI/bge-small-en": 384,
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en": 768,
+    "BAAI/bge-base-en-v1.5": 768,
+    "BAAI/bge-large-en-v1.5": 1024,
+    "mixedbread-ai/mxbai-embed-large-v1": 1024,
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+    "snowflake/snowflake-arctic-embed-xs": 384,
+    "snowflake/snowflake-arctic-embed-s": 384,
+    "snowflake/snowflake-arctic-embed-m": 768,
+    "snowflake/snowflake-arctic-embed-l": 1024,
+    "thenlper/gte-large": 1024,
+}
+
+
+def _resolve_embedder_dimensions(
+    embedder_model: str, embedder_dims_override: str | None
+) -> int:
+    """Resolve embedding dimensions for the configured local embedder.
+
+    Mem0's Qdrant config defaults to 1536 dimensions unless we override it.
+    For FastEmbed models we must pass the correct value explicitly, otherwise
+    the collection schema is created with the wrong size.
+    """
+    if embedder_dims_override:
+        return int(embedder_dims_override)
+
+    if embedder_model in _FASTEMBED_MODEL_DIMS:
+        return _FASTEMBED_MODEL_DIMS[embedder_model]
+
+    msg = (
+        f"Unknown embedding dimensions for model '{embedder_model}'. "
+        "Set MEM0_EMBEDDER_DIMS explicitly."
+    )
+    raise ValueError(msg)
+
+
+def _validate_local_collection_dimensions(
+    qdrant_path: str, collection_name: str, expected_dims: int
+) -> None:
+    """Fail early when an embedded local collection uses the wrong dimensions."""
+    metadata_path = Path(qdrant_path) / "meta.json"
+    if not metadata_path.is_file():
+        return
+
+    metadata = json.loads(metadata_path.read_text())
+    collections = metadata.get("collections", {})
+    collection_metadata = collections.get(collection_name)
+    if not collection_metadata:
+        return
+
+    actual_dims = collection_metadata.get("vectors", {}).get("size")
+    if actual_dims == expected_dims:
+        return
+
+    msg = (
+        f"Mem0 collection '{collection_name}' at '{qdrant_path}' uses "
+        f"{actual_dims} dimensions, but embedder requires {expected_dims}. "
+        "Delete the local Qdrant data or choose a different collection name."
+    )
+    raise ValueError(msg)
+
 
 def _build_mem0_config(
     llm_api_key: str,
@@ -24,6 +91,7 @@ def _build_mem0_config(
     llm_temperature: float,
     llm_max_tokens: int,
     embedder_model: str,
+    embedder_dims: int,
     collection_name: str,
     qdrant_path: str | None,
     qdrant_host: str | None,
@@ -43,6 +111,7 @@ def _build_mem0_config(
         # Remote server mode - connect to external Qdrant
         vector_store_config: dict[str, Any] = {
             "collection_name": collection_name,
+            "embedding_model_dims": embedder_dims,
             "host": qdrant_host,
             "port": qdrant_port,
         }
@@ -50,7 +119,8 @@ def _build_mem0_config(
         # Embedded on-disk mode (default) - no separate service needed
         vector_store_config = {
             "collection_name": collection_name,
-            "path": qdrant_path or "./data/qdrant",
+            "embedding_model_dims": embedder_dims,
+            "path": qdrant_path or _DEFAULT_QDRANT_PATH,
             "on_disk": True,
         }
 
@@ -164,13 +234,17 @@ def get_mem0_client() -> Any:
     # Step 3: Fetch additional config values
     llm_temperature = float(os.getenv("MEM0_LLM_TEMPERATURE", "0.1"))
     llm_max_tokens = int(os.getenv("MEM0_LLM_MAX_TOKENS", "1000"))
-    embedder_model = os.getenv("MEM0_EMBEDDER_MODEL", "BAAI/bge-small-en-v1.5")
+    embedder_model = os.getenv("MEM0_EMBEDDER_MODEL", _DEFAULT_EMBEDDER_MODEL)
+    embedder_dims = _resolve_embedder_dimensions(
+        embedder_model=embedder_model,
+        embedder_dims_override=os.getenv("MEM0_EMBEDDER_DIMS"),
+    )
     collection_name = os.getenv("MEM0_COLLECTION_NAME", "agent_memories")
 
     # Qdrant configuration - support both embedded and server modes
     # Embedded mode (default): uses on-disk storage at qdrant_path
     # Server mode: connects to external Qdrant at qdrant_host:qdrant_port
-    qdrant_path = os.getenv("MEM0_QDRANT_PATH", "./data/qdrant")
+    qdrant_path = os.getenv("MEM0_QDRANT_PATH", _DEFAULT_QDRANT_PATH)
     qdrant_host = os.getenv("MEM0_QDRANT_HOST", None)
     qdrant_port = (
         int(os.getenv("MEM0_QDRANT_PORT", "0"))
@@ -193,6 +267,11 @@ def get_mem0_client() -> Any:
             collection_name,
             embedder_model,
         )
+        _validate_local_collection_dimensions(
+            qdrant_path=qdrant_path,
+            collection_name=collection_name,
+            expected_dims=embedder_dims,
+        )
 
     try:
         from mem0 import Memory  # type: ignore[import-untyped]
@@ -209,6 +288,7 @@ def get_mem0_client() -> Any:
             llm_temperature=llm_temperature,
             llm_max_tokens=llm_max_tokens,
             embedder_model=embedder_model,
+            embedder_dims=embedder_dims,
             collection_name=collection_name,
             qdrant_path=qdrant_path,
             qdrant_host=qdrant_host,

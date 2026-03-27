@@ -1,7 +1,9 @@
 """Unit tests for mem0_integration module."""
 
+import json
 import logging
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +11,8 @@ import pytest
 from agent.mem0_integration import (
     Mem0Manager,
     _build_mem0_config,
+    _resolve_embedder_dimensions,
+    _validate_local_collection_dimensions,
     get_mem0_client,
     get_mem0_manager,
     is_mem0_enabled,
@@ -730,6 +734,7 @@ class TestBuildMem0Config:
             llm_temperature=0.1,
             llm_max_tokens=1000,
             embedder_model="test-embedder",
+            embedder_dims=384,
             collection_name="test_collection",
             qdrant_path="./data/qdrant",
             qdrant_host=None,
@@ -737,6 +742,7 @@ class TestBuildMem0Config:
         )
 
         vector_store_config = config["vector_store"]["config"]
+        assert vector_store_config["embedding_model_dims"] == 384
         assert "path" in vector_store_config
         assert vector_store_config["path"] == "./data/qdrant"
         assert vector_store_config["on_disk"] is True
@@ -752,6 +758,7 @@ class TestBuildMem0Config:
             llm_temperature=0.1,
             llm_max_tokens=1000,
             embedder_model="test-embedder",
+            embedder_dims=768,
             collection_name="test_collection",
             qdrant_path="./data/qdrant",
             qdrant_host="localhost",
@@ -759,6 +766,7 @@ class TestBuildMem0Config:
         )
 
         vector_store_config = config["vector_store"]["config"]
+        assert vector_store_config["embedding_model_dims"] == 768
         assert "host" in vector_store_config
         assert vector_store_config["host"] == "localhost"
         assert vector_store_config["port"] == 6333
@@ -775,6 +783,7 @@ class TestBuildMem0Config:
             llm_temperature=0.1,
             llm_max_tokens=1000,
             embedder_model="test-embedder",
+            embedder_dims=384,
             collection_name="test_collection",
             qdrant_path=None,  # Should use default
             qdrant_host=None,
@@ -792,6 +801,7 @@ class TestBuildMem0Config:
             llm_temperature=0.5,
             llm_max_tokens=2000,
             embedder_model="test-embedder",
+            embedder_dims=384,
             collection_name="test_collection",
             qdrant_path="./data/qdrant",
             qdrant_host=None,
@@ -812,6 +822,7 @@ class TestBuildMem0Config:
             llm_temperature=0.1,
             llm_max_tokens=1000,
             embedder_model="BAAI/bge-small-en-v1.5",
+            embedder_dims=384,
             collection_name="test_collection",
             qdrant_path="./data/qdrant",
             qdrant_host=None,
@@ -820,6 +831,70 @@ class TestBuildMem0Config:
 
         embedder_config = config["embedder"]["config"]
         assert embedder_config["model"] == "BAAI/bge-small-en-v1.5"
+
+
+class TestResolveEmbedderDimensions:
+    """Tests for embedder dimension resolution."""
+
+    def test_uses_known_model_dimensions(self) -> None:
+        """Known FastEmbed models should resolve without an env override."""
+        assert _resolve_embedder_dimensions("BAAI/bge-small-en-v1.5", None) == 384
+
+    def test_uses_explicit_override_when_set(self) -> None:
+        """Explicit dimensions should take precedence over model mapping."""
+        assert _resolve_embedder_dimensions("unknown-model", "512") == 512
+
+    def test_raises_for_unknown_model_without_override(self) -> None:
+        """Unknown models should fail fast with a clear message."""
+        with pytest.raises(ValueError, match="Set MEM0_EMBEDDER_DIMS explicitly"):
+            _resolve_embedder_dimensions("unknown-model", None)
+
+
+class TestValidateLocalCollectionDimensions:
+    """Tests for local collection dimension validation."""
+
+    def test_skips_when_metadata_missing(self, tmp_path: Path) -> None:
+        """No metadata file means there is no existing collection to validate."""
+        _validate_local_collection_dimensions(
+            qdrant_path=str(tmp_path),
+            collection_name="agent_memories",
+            expected_dims=384,
+        )
+
+    def test_skips_when_collection_missing(self, tmp_path: Path) -> None:
+        """Metadata without the target collection should not raise."""
+        meta_path = tmp_path / "meta.json"
+        meta_path.write_text(json.dumps({"collections": {}}))
+
+        _validate_local_collection_dimensions(
+            qdrant_path=str(tmp_path),
+            collection_name="agent_memories",
+            expected_dims=384,
+        )
+
+    def test_raises_when_collection_dimension_mismatches(self, tmp_path: Path) -> None:
+        """Existing collections must match the configured embedding dimensions."""
+        meta_path = tmp_path / "meta.json"
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "collections": {
+                        "agent_memories": {
+                            "vectors": {"size": 1536},
+                        }
+                    }
+                }
+            )
+        )
+
+        with pytest.raises(
+            ValueError, match="uses 1536 dimensions, but embedder requires 384"
+        ):
+            _validate_local_collection_dimensions(
+                qdrant_path=str(tmp_path),
+                collection_name="agent_memories",
+                expected_dims=384,
+            )
 
 
 class TestCreateMem0MemoryClient:
@@ -863,7 +938,7 @@ class TestCreateMem0MemoryClient:
         from agent.mem0_integration import _create_mem0_memory_client
 
         memory_class = MagicMock()
-        memory_class.from_config = "not_callable"  # type: ignore[assignment]
+        memory_class.from_config = "not_callable"
         memory_class.return_value = mock_mem0_client
 
         result = _create_mem0_memory_client(memory_class, {"test": "config"})
@@ -883,7 +958,9 @@ class TestGetMem0ClientImportErrors:
 
         # Create a mock Memory class that raises ImportError on from_config
         mock_memory_class = MagicMock()
-        mock_memory_class.from_config.side_effect = ImportError("No module named 'fastembed'")
+        mock_memory_class.from_config.side_effect = ImportError(
+            "No module named 'fastembed'"
+        )
 
         mock_module = MagicMock()
         mock_module.Memory = mock_memory_class
@@ -910,9 +987,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_client
-        ):
+        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
             result = manager.search_memory("test query")
 
             assert result["status"] == "success"
@@ -930,17 +1005,13 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_client
-        ):
+        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
             result = manager.get_all_memories()
 
             assert result["status"] == "success"
             assert result["memories"] == []
 
-    def test_save_memory_empty_results(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_save_memory_empty_results(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test save_memory handles empty results array."""
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
@@ -950,9 +1021,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_client
-        ):
+        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
             result = manager.save_memory("test content")
 
             assert result["status"] == "success"
@@ -970,9 +1039,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_client
-        ):
+        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
             result = manager.save_memory("test content")
 
             assert result["status"] == "success"
