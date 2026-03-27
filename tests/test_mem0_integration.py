@@ -896,6 +896,28 @@ class TestValidateLocalCollectionDimensions:
                 expected_dims=384,
             )
 
+    def test_passes_when_collection_dimension_matches(self, tmp_path: Path) -> None:
+        """Existing collections with matching dimensions should pass validation."""
+        meta_path = tmp_path / "meta.json"
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "collections": {
+                        "agent_memories": {
+                            "vectors": {"size": 384},
+                        }
+                    }
+                }
+            )
+        )
+
+        # Should not raise - dimensions match
+        _validate_local_collection_dimensions(
+            qdrant_path=str(tmp_path),
+            collection_name="agent_memories",
+            expected_dims=384,
+        )
+
 
 class TestCreateMem0MemoryClient:
     """Tests for _create_mem0_memory_client function."""
