@@ -5,7 +5,7 @@ to interact with the mem0 memory system.
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from google.adk.tools import ToolContext
 
@@ -38,7 +38,9 @@ def save_memory(
     user_id = tool_context.state.get("user_id") if tool_context.state else None
 
     manager = get_mem0_manager()
-    return manager.save_memory(content, user_id=user_id, metadata=metadata)
+    return cast(
+        dict[str, Any], manager.save_memory(content, user_id=user_id, metadata=metadata)
+    )
 
 
 def search_memory(
@@ -65,4 +67,6 @@ def search_memory(
     user_id = tool_context.state.get("user_id") if tool_context.state else None
 
     manager = get_mem0_manager()
-    return manager.search_memory(query, user_id=user_id, limit=limit)
+    return cast(
+        dict[str, Any], manager.search_memory(query, user_id=user_id, limit=limit)
+    )

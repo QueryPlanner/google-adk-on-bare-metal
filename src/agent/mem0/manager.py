@@ -6,7 +6,9 @@ with a higher-level interface for storing and retrieving memories.
 
 import logging
 import os
-from typing import Any
+from collections.abc import Callable
+from functools import wraps
+from typing import Any, cast
 
 from .client import get_mem0_client, is_mem0_enabled
 
@@ -14,6 +16,48 @@ logger = logging.getLogger(__name__)
 
 # Global manager instance
 _mem0_manager: "Mem0Manager | None" = None
+
+
+def _handle_mem0_api_call(
+    operation_name: str, returns_memories: bool = False
+) -> Callable:
+    """Decorator to handle mem0 availability and errors for API calls.
+
+    Args:
+        operation_name: Human-readable name for the operation (used in error messages).
+        returns_memories: Whether the response should include a memories list.
+
+    Returns:
+        A decorator that wraps mem0 API methods.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(self: "Mem0Manager", *args: Any, **kwargs: Any) -> dict[str, Any]:
+            if not is_mem0_enabled():
+                response: dict[str, Any] = {
+                    "status": "disabled",
+                    "message": "mem0 is not configured or unavailable",
+                }
+                if returns_memories:
+                    response["memories"] = []
+                return response
+
+            try:
+                return cast(dict[str, Any], func(self, *args, **kwargs))
+            except Exception as e:
+                logger.error(f"Failed to {operation_name}: {e}")
+                response = {
+                    "status": "error",
+                    "message": f"Failed to {operation_name}: {e}",
+                }
+                if returns_memories:
+                    response["memories"] = []
+                return response
+
+        return wrapper
+
+    return decorator
 
 
 class Mem0Manager:
@@ -57,6 +101,7 @@ class Mem0Manager:
         """
         return self._user_id
 
+    @_handle_mem0_api_call("save memory")
     def save_memory(
         self,
         content: str,
@@ -73,42 +118,30 @@ class Mem0Manager:
         Returns:
             A dictionary with the result of the save operation.
         """
-        if not is_mem0_enabled():
-            return {
-                "status": "disabled",
-                "message": "mem0 is not configured or unavailable",
-            }
+        result = self.client.add(
+            content,
+            user_id=user_id or self._user_id,
+            metadata=metadata,
+        )
+        logger.debug(f"Saved memory: {result}")
 
-        try:
-            result = self.client.add(
-                content,
-                user_id=user_id or self._user_id,
-                metadata=metadata,
-            )
-            logger.debug(f"Saved memory: {result}")
+        # Mem0 v1.x returns {"results": [...]} for add operations
+        memory_id = None
+        if isinstance(result, dict):
+            if "results" in result and result["results"]:
+                # Extract ID from the first result
+                memory_id = result["results"][0].get("id")
+            elif "id" in result:
+                # Fallback for older response format
+                memory_id = result.get("id")
 
-            # Mem0 v1.x returns {"results": [...]} for add operations
-            memory_id = None
-            if isinstance(result, dict):
-                if "results" in result and result["results"]:
-                    # Extract ID from the first result
-                    memory_id = result["results"][0].get("id")
-                elif "id" in result:
-                    # Fallback for older response format
-                    memory_id = result.get("id")
+        return {
+            "status": "success",
+            "message": "Memory saved successfully",
+            "memory_id": memory_id,
+        }
 
-            return {
-                "status": "success",
-                "message": "Memory saved successfully",
-                "memory_id": memory_id,
-            }
-        except Exception as e:
-            logger.error(f"Failed to save memory: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to save memory: {e}",
-            }
-
+    @_handle_mem0_api_call("search memories", returns_memories=True)
     def search_memory(
         self,
         query: str,
@@ -125,42 +158,28 @@ class Mem0Manager:
         Returns:
             A dictionary with the search results.
         """
-        if not is_mem0_enabled():
-            return {
-                "status": "disabled",
-                "message": "mem0 is not configured or unavailable",
-                "memories": [],
-            }
+        result = self.client.search(
+            query,
+            user_id=user_id or self._user_id,
+            limit=limit,
+        )
+        logger.debug(f"Search results: {result}")
 
-        try:
-            result = self.client.search(
-                query,
-                user_id=user_id or self._user_id,
-                limit=limit,
-            )
-            logger.debug(f"Search results: {result}")
+        # Mem0 v1.x returns {"results": [...]} for search operations
+        if isinstance(result, dict) and "results" in result:
+            memories = result["results"]
+        elif isinstance(result, list):
+            # Fallback for older response format
+            memories = result
+        else:
+            memories = []
 
-            # Mem0 v1.x returns {"results": [...]} for search operations
-            if isinstance(result, dict) and "results" in result:
-                memories = result["results"]
-            elif isinstance(result, list):
-                # Fallback for older response format
-                memories = result
-            else:
-                memories = []
+        return {
+            "status": "success",
+            "memories": memories,
+        }
 
-            return {
-                "status": "success",
-                "memories": memories,
-            }
-        except Exception as e:
-            logger.error(f"Failed to search memories: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to search memories: {e}",
-                "memories": [],
-            }
-
+    @_handle_mem0_api_call("get memories", returns_memories=True)
     def get_all_memories(self, user_id: str | None = None) -> dict[str, Any]:
         """Get all memories for a user.
 
@@ -170,38 +189,23 @@ class Mem0Manager:
         Returns:
             A dictionary with all memories.
         """
-        if not is_mem0_enabled():
-            return {
-                "status": "disabled",
-                "message": "mem0 is not configured or unavailable",
-                "memories": [],
-            }
+        result = self.client.get_all(user_id=user_id or self._user_id)
+        logger.debug(f"Get all results: {result}")
 
-        try:
-            result = self.client.get_all(user_id=user_id or self._user_id)
-            logger.debug(f"Get all results: {result}")
+        # Mem0 v1.x returns {"results": [...]} for get_all operations
+        if isinstance(result, dict) and "results" in result:
+            memories = result["results"]
+        elif isinstance(result, list):
+            # Fallback for older response format
+            memories = result
+        else:
+            memories = []
 
-            # Mem0 v1.x returns {"results": [...]} for get_all operations
-            if isinstance(result, dict) and "results" in result:
-                memories = result["results"]
-            elif isinstance(result, list):
-                # Fallback for older response format
-                memories = result
-            else:
-                memories = []
-
-            logger.debug(f"Retrieved {len(memories)} memories")
-            return {
-                "status": "success",
-                "memories": memories,
-            }
-        except Exception as e:
-            logger.error(f"Failed to get memories: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to get memories: {e}",
-                "memories": [],
-            }
+        logger.debug(f"Retrieved {len(memories)} memories")
+        return {
+            "status": "success",
+            "memories": memories,
+        }
 
 
 def get_mem0_manager() -> Mem0Manager:
