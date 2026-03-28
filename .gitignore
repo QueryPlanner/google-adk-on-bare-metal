@@ -90,4 +90,7 @@ pip-wheel-metadata/
 # ---------------------------------------------------------------------------
 **/.adk/
 
+# Local runtime data (Qdrant vector store, etc.)
+data/
+
 \n# Local conductor directory\nconductor/
