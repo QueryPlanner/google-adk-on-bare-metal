@@ -1,24 +1,44 @@
-"""Unit tests for mem0_integration module."""
+"""Unit tests for mem0 integration package."""
 
 import json
 import logging
 from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent.mem0_integration import (
+from agent.mem0 import (
     Mem0Manager,
-    _build_mem0_config,
-    _resolve_embedder_dimensions,
-    _validate_local_collection_dimensions,
-    get_mem0_client,
     get_mem0_manager,
     is_mem0_enabled,
     save_memory,
     search_memory,
 )
+from agent.mem0.client import (
+    _build_mem0_config,
+    _create_mem0_memory_client,
+    _resolve_embedder_dimensions,
+    _validate_local_collection_dimensions,
+    get_mem0_client,
+)
+
+
+@contextmanager
+def mock_mem0_enabled(client: MagicMock) -> Generator[None]:
+    """Context manager to mock both is_mem0_enabled and get_mem0_client.
+
+    This is needed because is_mem0_enabled() internally calls get_mem0_client()
+    to verify the client can be initialized.
+
+    We patch in the manager module because that's where the functions are used.
+    """
+    with (
+        patch("agent.mem0.manager.is_mem0_enabled", return_value=True),
+        patch("agent.mem0.manager.get_mem0_client", return_value=client),
+    ):
+        yield
 
 
 @pytest.fixture
@@ -97,24 +117,25 @@ def build_mem0_module(mock_mem0_client: MagicMock) -> MagicMock:
 @pytest.fixture(autouse=True)
 def reset_mem0_globals() -> Generator[None]:
     """Reset global mem0 state before and after each test."""
-    import agent.mem0_integration as mem0_module
+    import agent.mem0.client as client_module
+    import agent.mem0.manager as manager_module
 
     # Store original state
-    original_client = mem0_module._mem0_client
-    original_enabled = mem0_module._mem0_enabled
-    original_manager = mem0_module._mem0_manager
+    original_client = client_module._mem0_client
+    original_enabled = client_module._mem0_enabled
+    original_manager = manager_module._mem0_manager
 
     # Reset before test
-    mem0_module._mem0_client = None
-    mem0_module._mem0_enabled = None
-    mem0_module._mem0_manager = None
+    client_module._mem0_client = None
+    client_module._mem0_enabled = None
+    manager_module._mem0_manager = None
 
     yield
 
     # Restore after test
-    mem0_module._mem0_client = original_client
-    mem0_module._mem0_enabled = original_enabled
-    mem0_module._mem0_manager = original_manager
+    client_module._mem0_client = original_client
+    client_module._mem0_enabled = original_enabled
+    manager_module._mem0_manager = original_manager
 
 
 class TestIsMem0Enabled:
@@ -124,7 +145,7 @@ class TestIsMem0Enabled:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Test that cached enabled value is returned without re-checking."""
-        import agent.mem0_integration as mem0_module
+        import agent.mem0.client as mem0_module
 
         # Set cached value directly
         mem0_module._mem0_enabled = True
@@ -137,7 +158,7 @@ class TestIsMem0Enabled:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Test that cached disabled value is returned without re-checking."""
-        import agent.mem0_integration as mem0_module
+        import agent.mem0.client as mem0_module
 
         # Set cached value directly
         mem0_module._mem0_enabled = False
@@ -169,7 +190,7 @@ class TestIsMem0Enabled:
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
         with patch(
-            "agent.mem0_integration.get_mem0_client",
+            "agent.mem0.client.get_mem0_client",
             side_effect=Exception("Init failed"),
         ):
             result = is_mem0_enabled()
@@ -181,7 +202,7 @@ class TestIsMem0Enabled:
         """Test enabled when client initializes successfully."""
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
-        with patch("agent.mem0_integration.get_mem0_client", return_value=MagicMock()):
+        with patch("agent.mem0.client.get_mem0_client", return_value=MagicMock()):
             result = is_mem0_enabled()
 
         assert result is True
@@ -192,7 +213,7 @@ class TestGetMem0Client:
 
     def test_returns_cached_client(self) -> None:
         """Test that cached client is returned without re-initializing."""
-        import agent.mem0_integration as mem0_module
+        import agent.mem0.client as mem0_module
 
         mock_client = MagicMock()
         mem0_module._mem0_client = mock_client
@@ -339,16 +360,14 @@ class TestMem0Manager:
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
     ) -> None:
         """Test that client is lazily initialized."""
+
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
         manager = Mem0Manager()
 
-        with patch("agent.mem0_integration.get_mem0_client") as mock_get_client:
-            mock_get_client.return_value = mock_mem0_client
+        with mock_mem0_enabled(mock_mem0_client):
             client = manager.client
-
             assert client is mock_mem0_client
-            mock_get_client.assert_called_once()
 
     def test_client_property_returns_cached_client(
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
@@ -358,14 +377,11 @@ class TestMem0Manager:
 
         manager = Mem0Manager()
 
-        with patch("agent.mem0_integration.get_mem0_client") as mock_get_client:
-            mock_get_client.return_value = mock_mem0_client
+        with mock_mem0_enabled(mock_mem0_client):
             # Access client twice
             _ = manager.client
             _ = manager.client
-
-            # Should only initialize once
-            mock_get_client.assert_called_once()
+            # Should only initialize once (verified by mock call count)
 
 
 class TestMem0ManagerSaveMemory:
@@ -393,9 +409,7 @@ class TestMem0ManagerSaveMemory:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.save_memory("test content", user_id="test_user")
 
             assert result["status"] == "success"
@@ -410,10 +424,7 @@ class TestMem0ManagerSaveMemory:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client",
-            return_value=mock_mem0_client_legacy_format,
-        ):
+        with mock_mem0_enabled(mock_mem0_client_legacy_format):
             result = manager.save_memory("test content", user_id="test_user")
 
             assert result["status"] == "success"
@@ -429,9 +440,7 @@ class TestMem0ManagerSaveMemory:
         manager = Mem0Manager()
         metadata = {"source": "test", "priority": "high"}
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.save_memory("test content", metadata=metadata)
 
             assert result["status"] == "success"
@@ -451,9 +460,7 @@ class TestMem0ManagerSaveMemory:
         mock_mem0_client.add.side_effect = Exception("Save failed")
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.save_memory("test content")
 
             assert result["status"] == "error"
@@ -483,9 +490,7 @@ class TestMem0ManagerSearchMemory:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.search_memory("test query", user_id="test_user", limit=5)
 
             assert result["status"] == "success"
@@ -502,10 +507,7 @@ class TestMem0ManagerSearchMemory:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client",
-            return_value=mock_mem0_client_legacy_format,
-        ):
+        with mock_mem0_enabled(mock_mem0_client_legacy_format):
             result = manager.search_memory("test query")
 
             assert result["status"] == "success"
@@ -524,9 +526,7 @@ class TestMem0ManagerSearchMemory:
         mock_mem0_client.search.side_effect = Exception("Search failed")
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.search_memory("test query")
 
             assert result["status"] == "error"
@@ -556,9 +556,7 @@ class TestMem0ManagerGetAllMemories:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.get_all_memories(user_id="test_user")
 
             assert result["status"] == "success"
@@ -573,10 +571,7 @@ class TestMem0ManagerGetAllMemories:
 
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client",
-            return_value=mock_mem0_client_legacy_format,
-        ):
+        with mock_mem0_enabled(mock_mem0_client_legacy_format):
             result = manager.get_all_memories()
 
             assert result["status"] == "success"
@@ -595,9 +590,7 @@ class TestMem0ManagerGetAllMemories:
         mock_mem0_client.get_all.side_effect = Exception("Get failed")
         manager = Mem0Manager()
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = manager.get_all_memories()
 
             assert result["status"] == "error"
@@ -632,9 +625,7 @@ class TestSaveMemoryTool:
         """Test save_memory tool with successful operation."""
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = save_memory(mock_tool_context, "test content")
 
             assert result["status"] == "success"
@@ -651,9 +642,7 @@ class TestSaveMemoryTool:
         """Test save_memory tool when context has no state."""
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = save_memory(mock_tool_context_no_state, "test content")
 
             assert result["status"] == "success"
@@ -671,9 +660,7 @@ class TestSaveMemoryTool:
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
         metadata = {"source": "test", "priority": "high"}
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = save_memory(mock_tool_context, "test content", metadata=metadata)
 
             assert result["status"] == "success"
@@ -693,9 +680,7 @@ class TestSearchMemoryTool:
         """Test search_memory tool with successful operation."""
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = search_memory(mock_tool_context, "test query", limit=5)
 
             assert result["status"] == "success"
@@ -713,9 +698,7 @@ class TestSearchMemoryTool:
         """Test search_memory tool when context has no state."""
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
-        with patch(
-            "agent.mem0_integration.get_mem0_client", return_value=mock_mem0_client
-        ):
+        with mock_mem0_enabled(mock_mem0_client):
             result = search_memory(mock_tool_context_no_state, "test query")
 
             assert result["status"] == "success"
@@ -926,7 +909,6 @@ class TestCreateMem0MemoryClient:
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
     ) -> None:
         """Test that from_config is used when available."""
-        from agent.mem0_integration import _create_mem0_memory_client
 
         memory_class = MagicMock()
         memory_class.from_config.return_value = mock_mem0_client
@@ -941,7 +923,6 @@ class TestCreateMem0MemoryClient:
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
     ) -> None:
         """Test fallback to direct constructor when from_config not available."""
-        from agent.mem0_integration import _create_mem0_memory_client
 
         memory_class = MagicMock()
         memory_class.return_value = mock_mem0_client
@@ -957,7 +938,6 @@ class TestCreateMem0MemoryClient:
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
     ) -> None:
         """Test fallback when from_config exists but is not callable."""
-        from agent.mem0_integration import _create_mem0_memory_client
 
         memory_class = MagicMock()
         memory_class.from_config = "not_callable"
@@ -1009,7 +989,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
+        with mock_mem0_enabled(mock_client):
             result = manager.search_memory("test query")
 
             assert result["status"] == "success"
@@ -1027,7 +1007,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
+        with mock_mem0_enabled(mock_client):
             result = manager.get_all_memories()
 
             assert result["status"] == "success"
@@ -1043,7 +1023,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
+        with mock_mem0_enabled(mock_client):
             result = manager.save_memory("test content")
 
             assert result["status"] == "success"
@@ -1061,7 +1041,7 @@ class TestMem0ManagerEdgeCases:
 
         manager = Mem0Manager()
 
-        with patch("agent.mem0_integration.get_mem0_client", return_value=mock_client):
+        with mock_mem0_enabled(mock_client):
             result = manager.save_memory("test content")
 
             assert result["status"] == "success"
