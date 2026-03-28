@@ -16,7 +16,7 @@ from google.adk.tools import ToolContext
 from google.adk.tools.base_tool import BaseTool
 from google.genai import types
 
-from .mem0_integration import get_mem0_manager, is_mem0_enabled
+from .mem0 import get_mem0_manager, is_mem0_enabled
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ from .callbacks import (
     add_memories_to_context,
     add_session_to_memory,
 )
-from .mem0_integration import is_mem0_enabled, save_memory, search_memory
+from .mem0 import is_mem0_enabled, save_memory, search_memory
 from .prompt import (
     return_description_root,
     return_global_instruction,
