@@ -360,14 +360,16 @@ class TestMem0Manager:
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
     ) -> None:
         """Test that client is lazily initialized."""
-
         monkeypatch.setenv("MEM0_LLM_API_KEY", "test-key")
 
         manager = Mem0Manager()
 
-        with mock_mem0_enabled(mock_mem0_client):
+        with patch(
+            "agent.mem0.manager.get_mem0_client", return_value=mock_mem0_client
+        ) as mock_get_client:
             client = manager.client
             assert client is mock_mem0_client
+            mock_get_client.assert_called_once()
 
     def test_client_property_returns_cached_client(
         self, monkeypatch: pytest.MonkeyPatch, mock_mem0_client: MagicMock
@@ -377,11 +379,14 @@ class TestMem0Manager:
 
         manager = Mem0Manager()
 
-        with mock_mem0_enabled(mock_mem0_client):
+        with patch(
+            "agent.mem0.manager.get_mem0_client", return_value=mock_mem0_client
+        ) as mock_get_client:
             # Access client twice
             _ = manager.client
             _ = manager.client
-            # Should only initialize once (verified by mock call count)
+            # Should only initialize once
+            mock_get_client.assert_called_once()
 
 
 class TestMem0ManagerSaveMemory:
