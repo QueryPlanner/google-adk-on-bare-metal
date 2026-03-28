@@ -575,7 +575,7 @@ wheels = [
 
 [[package]]
 name = "google-adk-on-bare-metal"
-version = "0.2.0"
+version = "0.20.0"
 source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },

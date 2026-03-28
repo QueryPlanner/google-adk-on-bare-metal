@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-03-28
+
+### Changed
+- Bump package version to 0.20.0.
+
 ## [0.2.0] - 2026-03-28
 
 ### Added
@@ -46,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved `ValueError: Missing key inputs argument` by ensuring API keys are properly injected into the container environment.
 - Addressed interactive prompt issues in `setup.sh` by setting `DEBIAN_FRONTEND=noninteractive`.
 
-[Unreleased]: https://github.com/QueryPlanner/google-adk-on-bare-metal/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/QueryPlanner/google-adk-on-bare-metal/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/QueryPlanner/google-adk-on-bare-metal/compare/v0.2.0...v0.20.0
 [0.2.0]: https://github.com/QueryPlanner/google-adk-on-bare-metal/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/QueryPlanner/google-adk-on-bare-metal/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/QueryPlanner/google-adk-on-bare-metal/releases/tag/v0.1.0
