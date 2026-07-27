@@ -11,6 +11,23 @@ jobs:
   test:
     name: Lint & Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEST_POSTGRES_ADMIN_URL: postgresql://postgres:postgres-test-password@127.0.0.1:5432/postgres
+    services:
+      postgres:
+        image: postgres:17.9-alpine3.23@sha256:c7526c0f6c3f30260a563d7bcf8ad778effac59a44f8ffa86678c35418338609
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres-test-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     strategy:
       matrix:
         python-version: ['3.13']
