@@ -1,11 +1,8 @@
 """ADK LlmAgent configuration."""
 
 import logging
-import os
-from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
 from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
@@ -23,25 +20,11 @@ from .prompt import (
     return_instruction_root,
 )
 from .tools import example_tool
+from .utils.config import AgentRuntimeEnv
 
 logger = logging.getLogger(__name__)
 
 logging_callbacks = LoggingCallbacks()
-
-
-def _find_and_load_dotenv() -> None:
-    """Load a nearby ``.env`` so ``ROOT_AGENT_MODEL`` is set before we read it.
-
-    The ADK agent loader calls ``load_dotenv_for_agent`` before importing this
-    module, but other import paths (tests, tooling) may import ``agent`` first.
-    Loading here avoids defaulting to native Gemini without ``GOOGLE_API_KEY``.
-    """
-    here = Path(__file__).resolve().parent
-    for directory in (here, *here.parents):
-        candidate = directory / ".env"
-        if candidate.is_file():
-            load_dotenv(candidate, override=False)
-            break
 
 
 def _normalize_model_for_openrouter(model_name: str) -> str:
@@ -63,19 +46,22 @@ def _normalize_model_for_openrouter(model_name: str) -> str:
     return normalized
 
 
-_find_and_load_dotenv()
-
 # Determine model configuration
-openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-google_api_key = os.getenv("GOOGLE_API_KEY")
+runtime_env = AgentRuntimeEnv()
+has_openrouter_api_key = bool(
+    runtime_env.openrouter_api_key and runtime_env.openrouter_api_key.get_secret_value()
+)
+has_google_api_key = bool(
+    runtime_env.google_api_key and runtime_env.google_api_key.get_secret_value()
+)
 
-model_name = os.getenv("ROOT_AGENT_MODEL", "gemini-2.5-flash")
+model_name = runtime_env.root_agent_model
 model: Any = model_name
 
 use_litellm = False
 
 # OpenRouter-only: never use native Gemini (requires GOOGLE_API_KEY).
-if openrouter_api_key and not google_api_key:
+if has_openrouter_api_key and not has_google_api_key:
     model_name = _normalize_model_for_openrouter(model_name)
     use_litellm = True
 elif model_name.lower().startswith("openrouter/") or "/" in model_name:
@@ -86,8 +72,13 @@ if use_litellm:
         from google.adk.models import LiteLlm
 
         litellm_kwargs: dict[str, Any] = {}
-        if model_name.lower().startswith("openrouter/") and openrouter_api_key:
-            litellm_kwargs["api_key"] = openrouter_api_key
+        if (
+            model_name.lower().startswith("openrouter/")
+            and runtime_env.openrouter_api_key
+        ):
+            litellm_kwargs["api_key"] = (
+                runtime_env.openrouter_api_key.get_secret_value()
+            )
 
         logger.info("Using LiteLlm for model: %s", model_name)
         model = LiteLlm(model=model_name, **litellm_kwargs)

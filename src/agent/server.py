@@ -5,7 +5,6 @@ features using custom OpenTelemetry setup. Includes an optional ADK web interfac
 interactive agent testing.
 """
 
-import os
 from pathlib import Path
 
 import uvicorn
@@ -14,6 +13,7 @@ from google.adk.cli.fast_api import get_fast_api_app
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
 from .utils import (
+    ObservabilityEnv,
     ServerEnv,
     configure_otel_resource,
     initialize_environment,
@@ -22,10 +22,12 @@ from .utils import (
 
 # Load and validate environment configuration
 env = initialize_environment(ServerEnv)
+observability_env = initialize_environment(ObservabilityEnv, print_config=False)
 
 # Configure OpenTelemetry
 configure_otel_resource(
     agent_name=env.agent_name,
+    settings=observability_env,
 )
 
 # Initialize Langfuse/OpenInference instrumentation
@@ -36,7 +38,7 @@ setup_logging(log_level=env.log_level)
 
 
 # Use .resolve() to handle symlinks and ensure absolute path across environments
-AGENT_DIR = os.getenv("AGENT_DIR", str(Path(__file__).resolve().parent.parent))
+AGENT_DIR = env.agent_dir or str(Path(__file__).resolve().parent.parent)
 
 # Handle database URL conversion for asyncpg
 session_uri = env.session_uri

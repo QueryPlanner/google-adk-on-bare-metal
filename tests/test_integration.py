@@ -10,7 +10,16 @@ Future: Container-based smoke tests for CI/CD will be added here.
 from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
-from agent import app
+import pytest
+from google.adk.apps import App
+
+
+@pytest.fixture
+def app() -> App:
+    """Load the agent only after per-test environment isolation is active."""
+    from agent import app as agent_app
+
+    return agent_app
 
 
 class AgentConfigLike(Protocol):
@@ -31,18 +40,18 @@ def as_agent_config(agent: object) -> AgentConfigLike:
 class TestAppIntegration:
     """Pattern-based integration tests for App configuration and wiring."""
 
-    def test_app_is_properly_instantiated(self) -> None:
+    def test_app_is_properly_instantiated(self, app: App) -> None:
         """Verify app container is properly instantiated."""
         assert app is not None
         assert app.name is not None
         assert isinstance(app.name, str)
         assert len(app.name) > 0
 
-    def test_app_has_root_agent(self) -> None:
+    def test_app_has_root_agent(self, app: App) -> None:
         """Verify app is wired to root agent."""
         assert app.root_agent is not None
 
-    def test_app_plugins_are_valid_if_configured(self) -> None:
+    def test_app_plugins_are_valid_if_configured(self, app: App) -> None:
         """Verify plugins (if any) are properly initialized."""
         # Plugins are optional - if configured, they should be a list
         if app.plugins is not None:
@@ -56,7 +65,7 @@ class TestAppIntegration:
 class TestAgentIntegration:
     """Pattern-based integration tests for Agent configuration."""
 
-    def test_agent_has_required_configuration(self) -> None:
+    def test_agent_has_required_configuration(self, app: App) -> None:
         """Verify agent has required configuration fields."""
         agent = app.root_agent
         assert agent is not None
@@ -78,7 +87,7 @@ class TestAgentIntegration:
             assert isinstance(typed_agent.model.model, str)
             assert len(typed_agent.model.model) > 0
 
-    def test_agent_instructions_are_valid_if_configured(self) -> None:
+    def test_agent_instructions_are_valid_if_configured(self, app: App) -> None:
         """Verify agent instructions (if configured) are valid strings."""
         agent = app.root_agent
         assert agent is not None
@@ -94,7 +103,7 @@ class TestAgentIntegration:
             assert isinstance(typed_agent.description, str)
             assert len(typed_agent.description) > 0
 
-    def test_agent_tools_are_valid_if_configured(self) -> None:
+    def test_agent_tools_are_valid_if_configured(self, app: App) -> None:
         """Verify agent tools (if any) are properly initialized."""
         agent = app.root_agent
         assert agent is not None

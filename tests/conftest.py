@@ -1,9 +1,7 @@
 """Shared pytest fixtures for all tests."""
 
-from collections.abc import Callable, Generator
-from contextlib import AbstractContextManager
+from collections.abc import Callable
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -359,11 +357,7 @@ def valid_server_env() -> dict[str, str]:
     Returns:
         Dictionary with minimal required fields for ServerEnv.
     """
-    return {
-        "GOOGLE_CLOUD_PROJECT": "test-project",
-        "AGENT_NAME": "test-agent",
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
-    }
+    return {"AGENT_NAME": "test-agent"}
 
 
 class MockEnviron(dict[str, str]):
@@ -405,37 +399,47 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "SERVE_WEB_INTERFACE",
         "RELOAD_AGENTS",
         "AGENT_ENGINE",
+        "AGENT_DIR",
         "ARTIFACT_SERVICE_URI",
+        "DATABASE_URL",
+        "DB_POOL_PRE_PING",
+        "DB_POOL_RECYCLE",
+        "DB_POOL_SIZE",
+        "DB_MAX_OVERFLOW",
+        "DB_POOL_TIMEOUT",
+        "OPENROUTER_API_KEY",
+        "GOOGLE_API_KEY",
+        "ROOT_AGENT_MODEL",
         "ALLOW_ORIGINS",
         "HOST",
         "PORT",
+        "TELEMETRY_NAMESPACE",
+        "K_REVISION",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_RESOURCE_ATTRIBUTES",
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+        "ADK_DISABLE_LOAD_DOTENV",
+        "MEM0_LLM_API_KEY",
+        "MEM0_LLM_MODEL",
+        "MEM0_LLM_TEMPERATURE",
+        "MEM0_LLM_MAX_TOKENS",
+        "MEM0_EMBEDDER_MODEL",
+        "MEM0_EMBEDDER_DIMS",
+        "MEM0_COLLECTION_NAME",
+        "MEM0_QDRANT_PATH",
+        "MEM0_QDRANT_HOST",
+        "MEM0_QDRANT_PORT",
+        "MEM0_USER_ID",
+        "MEM0_SEARCH_LIMIT",
     ]
 
     for var in env_vars_to_clean:
         monkeypatch.delenv(var, raising=False)
-
-
-@pytest.fixture
-def mock_load_dotenv() -> Generator[MagicMock]:
-    """Mock load_dotenv function for testing.
-
-    Yields:
-        Mock object for load_dotenv function.
-    """
-    with patch("agent.utils.config.load_dotenv") as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_sys_exit() -> Generator[MagicMock]:
-    """Mock sys.exit with SystemExit side effect for testing validation failures.
-
-    Yields:
-        Mock object for sys.exit that raises SystemExit(1).
-    """
-    with patch("sys.exit", side_effect=SystemExit(1)) as mock:
-        yield mock
 
 
 @pytest.fixture
@@ -461,29 +465,3 @@ def set_environment(
             monkeypatch.setenv(key, value)
 
     return _set_env
-
-
-@pytest.fixture
-def mock_print_config() -> Callable[[type], AbstractContextManager[MagicMock]]:
-    """Context manager factory for mocking print_config on any model class.
-
-    Returns:
-        Factory function that creates a context manager for mocking print_config.
-    """
-    from contextlib import contextmanager
-    from unittest.mock import patch
-
-    @contextmanager
-    def _mock_print_config(model_class: type) -> Generator[MagicMock]:
-        """Create a context manager for mocking print_config on a model class.
-
-        Args:
-            model_class: The Pydantic model class to mock print_config on.
-
-        Yields:
-            Mock object for the print_config method.
-        """
-        with patch.object(model_class, "print_config", autospec=True) as mock:
-            yield mock
-
-    return _mock_print_config

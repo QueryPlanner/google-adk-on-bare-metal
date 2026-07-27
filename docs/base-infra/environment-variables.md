@@ -7,7 +7,7 @@ Complete reference for all environment variables used in this project.
 ### Database
 
 **DATABASE_URL**
-- **When:** Always required
+- **When:** Optional; required for persistent database-backed sessions
 - **Value:** Postgres connection string (e.g., `postgresql://user:pass@localhost:5432/dbname`)
 - **Purpose:** Persistent storage for agent sessions and memory
 
@@ -36,10 +36,19 @@ Complete reference for all environment variables used in this project.
 ### Agent Runtime Configuration
 
 **AGENT_NAME**
-- **When:** Optional
+- **When:** Required
 - **Value:** Unique identifier (e.g., `my-agent`)
-- **Default:** `agent`
 - **Purpose:** Identifies logs and traces
+
+**AGENT_DIR**
+- **When:** Optional
+- **Default:** The installed `src` directory detected by the server
+- **Purpose:** Directory containing ADK agent packages
+
+**ROOT_AGENT_MODEL**
+- **When:** Optional
+- **Default:** `gemini-2.5-flash`
+- **Purpose:** Model used by the root ADK agent
 
 **LOG_LEVEL**
 - **Options:** `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
@@ -83,14 +92,42 @@ Complete reference for all environment variables used in this project.
 - **Default:** `https://cloud.langfuse.com`
 - **Options:** `https://us.cloud.langfuse.com` or your self-hosted URL.
 
+### Observability (Generic OTLP)
+
+**OTEL_EXPORTER_OTLP_ENDPOINT**
+- **When:** Optional
+- **Purpose:** Explicit OTLP collector endpoint
+
+**OTEL_EXPORTER_OTLP_PROTOCOL**
+- **When:** Optional
+- **Purpose:** Explicit OTLP transport protocol, such as `http/protobuf`
+
+**OTEL_EXPORTER_OTLP_HEADERS**
+- **When:** Optional
+- **Purpose:** Authentication headers for the OTLP collector
+
+Explicit OTLP values take precedence over values derived from Langfuse credentials.
+
 ## Environment Variable Precedence
 
-1. **Environment variables** (highest priority)
-2. **.env file** (loaded via `python-dotenv`)
-3. **Default values** (defined in code)
+1. **Explicit settings constructor values** (highest priority)
+2. **Environment variables**
+3. **.env file** (loaded from the current working directory via
+   `pydantic-settings`)
+4. **Default values** (defined in code)
+
+Run server commands from the repository root when relying on `.env`. Container and
+VM-injected environment variables always take priority over values in that file.
+Server and observability settings read the current-directory file without copying
+its contents into the process environment. The server publishes only the validated
+standard `OTEL_*` values required by the OpenTelemetry SDK before instrumentation.
+
+Supported ADK and server entry points load agent provider and memory variables
+before importing the agent definition while preserving existing process values. A
+direct `from agent import app` is intentionally process-only; export provider
+variables first when using that low-level import path.
 
 ## Security Best Practices
 
 - **Never commit `.env` files** - Already gitignored
 - **Rotate credentials** - If `.env` is accidentally committed, rotate all credentials
-
