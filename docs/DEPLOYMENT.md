@@ -67,7 +67,8 @@ services:
 
 Then your update command becomes:
 ```bash
-docker compose pull && docker compose up -d
+docker compose pull
+docker compose up --wait --wait-timeout 180
 ```
 
 ---
@@ -86,14 +87,19 @@ Best if you don't want to manage Python versions on the host.
 
 2.  **Run**
     ```bash
-    docker compose up --build -d
+    docker compose up --build --wait --wait-timeout 180
     ```
 
 3.  **Update**
     ```bash
     git pull
-    docker compose up --build -d
+    docker compose up --build --wait --wait-timeout 180
     ```
+
+The Compose healthcheck calls the agent's process-level `/health` endpoint from
+inside the container. `--wait` exits successfully only after the service becomes
+healthy; `--wait-timeout` prevents an unhealthy startup from hanging automation
+indefinitely. Database-aware readiness is tracked separately in issue #37.
 
 ---
 
