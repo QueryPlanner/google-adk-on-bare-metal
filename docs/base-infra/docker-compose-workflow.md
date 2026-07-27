@@ -57,6 +57,15 @@ docker compose build
 docker compose up --build
 ```
 
+### Start in the background and wait for health
+```bash
+docker compose up --build --wait --wait-timeout 180
+```
+
+The healthcheck uses Python's standard HTTP client inside the container to call
+`/health`. It reports process liveness; database-aware readiness is a separate
+startup contract.
+
 ---
 
 ## How Watch Mode Works

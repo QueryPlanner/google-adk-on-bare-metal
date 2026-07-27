@@ -19,6 +19,20 @@ services:
     # Volumes are for hot-reloading and persisting artifacts.
     volumes:
       - agent_artifacts:/app/src/.adk
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.build_opener(
+          urllib.request.ProxyHandler({})).open(
+          "http://127.0.0.1:8080/health", timeout=3).read()
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     restart: always
     command: python -m agent.server
 

@@ -57,15 +57,19 @@ Since we include CI/CD, every push to `main` builds a fresh image. On your serve
 docker pull ghcr.io/queryplanner/google-adk-on-bare-metal:main
 
 # 2. Start the service
-docker compose up -d
+docker compose up --wait --wait-timeout 180
 ```
 
 ### Option 2: Build Yourself
 
 ```bash
 git pull
-docker compose up --build -d
+docker compose up --build --wait --wait-timeout 180
 ```
+
+The bounded `--wait` command returns only after the agent's container
+healthcheck passes, so scripts can distinguish a healthy startup from a
+container that merely started.
 
 👉 **[Read the Full Deployment Guide](docs/DEPLOYMENT.md)**
 
