@@ -99,7 +99,8 @@ Best if you don't want to manage Python versions on the host.
 The Compose healthcheck calls the agent's process-level `/health` endpoint from
 inside the container. `--wait` exits successfully only after the service becomes
 healthy; `--wait-timeout` prevents an unhealthy startup from hanging automation
-indefinitely. Database-aware readiness is tracked separately in issue #37.
+indefinitely. When `DATABASE_URL` is configured, the entrypoint first runs a
+bounded `SELECT 1` readiness check before starting the server.
 
 ---
 

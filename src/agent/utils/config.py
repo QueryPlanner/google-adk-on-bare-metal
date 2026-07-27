@@ -7,6 +7,7 @@ and configuration management.
 import json
 import warnings
 from typing import Any, Literal, Self, cast
+from urllib.parse import SplitResult, unquote_plus, urlsplit, urlunsplit
 
 from pydantic import (
     Field,
@@ -32,6 +33,160 @@ _EXAMPLE_SECRET_VALUES = {
         }
     ),
 }
+_DATABASE_READINESS_MAX_TIMEOUT = 3600.0
+_DATABASE_READINESS_MAX_INTERVAL = 60.0
+_SHARED_ASYNCPG_QUERY_KEYS = frozenset(
+    {
+        "gsslib",
+        "host",
+        "krbsrvname",
+        "passfile",
+        "port",
+        "target_session_attrs",
+    }
+)
+_TARGETED_ASYNCPG_QUERY_KEYS = frozenset(
+    {
+        "channel_binding",
+        "ssl",
+        "sslmode",
+    }
+)
+
+
+def _parse_postgresql_url(database_url: str) -> tuple[SplitResult, str]:
+    """Parse a supported PostgreSQL URL without including its value in errors."""
+    if not database_url or database_url != database_url.strip():
+        msg = "DATABASE_URL must be a non-blank PostgreSQL URL"
+        raise ValueError(msg)
+
+    try:
+        parsed = urlsplit(database_url)
+        _ = parsed.port
+    except ValueError:
+        msg = "DATABASE_URL must be a valid PostgreSQL URL"
+        raise ValueError(msg) from None
+
+    scheme = parsed.scheme.casefold()
+    supported_schemes = {"postgres", "postgresql", "postgresql+asyncpg"}
+    scheme_separator = database_url.find(":")
+    has_url_authority_marker = scheme_separator >= 0 and database_url[
+        scheme_separator + 1 :
+    ].startswith("//")
+    if (
+        scheme not in supported_schemes
+        or not has_url_authority_marker
+        or parsed.fragment
+    ):
+        msg = "DATABASE_URL must use a supported PostgreSQL URL"
+        raise ValueError(msg)
+
+    return parsed, scheme
+
+
+def _normalize_postgresql_query(
+    query: str,
+    *,
+    allow_host_option: bool,
+    allow_port_option: bool,
+    ssl_key: Literal["ssl", "sslmode"],
+) -> str:
+    """Return query options with identical direct and SQLAlchemy semantics."""
+    query_parts = query.split("&") if query else []
+    seen_keys: set[str] = set()
+    has_ssl = False
+    has_sslmode = False
+    normalized_query_parts: list[str] = []
+
+    for query_part in query_parts:
+        raw_key, separator, raw_value = query_part.partition("=")
+        key = unquote_plus(raw_key)
+
+        if key not in _SHARED_ASYNCPG_QUERY_KEYS | _TARGETED_ASYNCPG_QUERY_KEYS:
+            msg = "DATABASE_URL contains an unsupported PostgreSQL option"
+            raise ValueError(msg)
+        if key in seen_keys:
+            msg = "DATABASE_URL contains an ambiguous PostgreSQL option"
+            raise ValueError(msg)
+        seen_keys.add(key)
+        if not separator:
+            msg = "DATABASE_URL contains an invalid PostgreSQL option"
+            raise ValueError(msg)
+        if (key == "host" and not allow_host_option) or (
+            key == "port" and not allow_port_option
+        ):
+            msg = "DATABASE_URL contains an ambiguous PostgreSQL address option"
+            raise ValueError(msg)
+
+        if key not in _TARGETED_ASYNCPG_QUERY_KEYS:
+            normalized_query_parts.append(query_part)
+            continue
+
+        if key == "ssl":
+            has_ssl = True
+            normalized_query_parts.append(
+                query_part if ssl_key == "ssl" else f"sslmode={raw_value}"
+            )
+        elif key == "sslmode":
+            has_sslmode = True
+            normalized_query_parts.append(
+                query_part if ssl_key == "sslmode" else f"ssl={raw_value}"
+            )
+        elif unquote_plus(raw_value) != "require":
+            msg = "DATABASE_URL contains an unsupported channel_binding option"
+            raise ValueError(msg)
+
+    if has_ssl and has_sslmode:
+        msg = "DATABASE_URL must not set both ssl and sslmode"
+        raise ValueError(msg)
+
+    return "&".join(normalized_query_parts)
+
+
+def _rebuild_postgresql_url(
+    parsed: SplitResult,
+    *,
+    query: str,
+    scheme: str,
+) -> str:
+    """Rebuild a URL without collapsing an empty authority used for sockets."""
+    if parsed.netloc:
+        return urlunsplit((scheme, parsed.netloc, parsed.path, query, ""))
+
+    normalized_url = f"{scheme}://{parsed.path}"
+    return f"{normalized_url}?{query}" if query else normalized_url
+
+
+def _normalize_asyncpg_database_url(database_url: str) -> str:
+    """Normalize a supported PostgreSQL URL for a direct asyncpg connection."""
+    parsed, scheme = _parse_postgresql_url(database_url)
+    normalized_scheme = "postgresql" if scheme == "postgresql+asyncpg" else scheme
+    return _rebuild_postgresql_url(
+        parsed,
+        query=_normalize_postgresql_query(
+            parsed.query,
+            allow_host_option=parsed.hostname is None,
+            allow_port_option=parsed.port is None,
+            ssl_key="sslmode",
+        ),
+        scheme=normalized_scheme,
+    )
+
+
+def _normalize_sqlalchemy_database_url(database_url: str) -> str:
+    """Normalize a PostgreSQL URL for SQLAlchemy's asyncpg dialect."""
+    parsed, scheme = _parse_postgresql_url(database_url)
+    normalized_scheme = "postgresql" if scheme == "postgres" else scheme
+    return _rebuild_postgresql_url(
+        parsed,
+        query=_normalize_postgresql_query(
+            parsed.query,
+            allow_host_option=parsed.hostname is None,
+            allow_port_option=parsed.port is None,
+            ssl_key="ssl",
+        ),
+        scheme=normalized_scheme,
+    )
 
 
 class SettingsConfigurationError(Exception):
@@ -180,6 +335,56 @@ class AgentRuntimeEnv(RedactedBaseSettings):
     def _reject_example_secrets(self) -> Self:
         """Reject known provider-key placeholders."""
         _check_example_secret("OPENROUTER_API_KEY", self.openrouter_api_key)
+        return self
+
+
+class DatabaseReadinessEnv(RedactedBaseSettings):
+    """Process-only settings for the container database readiness gate."""
+
+    database_url: SecretStr | None = Field(
+        default=None,
+        alias="DATABASE_URL",
+        description="PostgreSQL URL checked before the application starts",
+    )
+    db_ready_timeout: float = Field(
+        default=60.0,
+        alias="DB_READY_TIMEOUT",
+        gt=0,
+        le=_DATABASE_READINESS_MAX_TIMEOUT,
+        description="Maximum total seconds to wait for database readiness",
+    )
+    retry_interval: float = Field(
+        default=1.0,
+        alias="DB_READY_RETRY_INTERVAL",
+        gt=0,
+        le=_DATABASE_READINESS_MAX_INTERVAL,
+        description="Seconds between transient database readiness failures",
+    )
+    attempt_timeout: float = Field(
+        default=5.0,
+        alias="DB_READY_ATTEMPT_TIMEOUT",
+        gt=0,
+        le=_DATABASE_READINESS_MAX_INTERVAL,
+        description="Maximum seconds for one database readiness attempt",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=None,
+        populate_by_name=True,
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_blank_database_url(cls, value: Any) -> Any:
+        """Treat a blank process value as an intentionally unconfigured database."""
+        return _blank_optional_value(value)
+
+    @model_validator(mode="after")
+    def _reject_example_database_url(self) -> Self:
+        """Reject the documented database placeholder before any connection attempt."""
+        _check_example_secret("DATABASE_URL", self.database_url)
         return self
 
 
@@ -438,12 +643,7 @@ class ServerEnv(RedactedBaseSettings):
         """Session service URI (Database or Agent Engine)."""
         if self.database_url:
             database_url = self.database_url.get_secret_value()
-            # asyncpg requires 'ssl=require' instead of 'sslmode=require'
-            # Also removing channel_binding as it causes TypeError with current
-            # sqlalchemy/asyncpg setup
-            return database_url.replace("sslmode=require", "ssl=require").replace(
-                "&channel_binding=require", ""
-            )
+            return _normalize_sqlalchemy_database_url(database_url)
         return self.agent_engine_uri
 
     @property

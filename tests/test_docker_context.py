@@ -141,3 +141,10 @@ def test_local_only_root_paths_are_not_allowlisted(path: str) -> None:
 
 def test_dockerfile_specific_ignore_cannot_override_policy() -> None:
     assert not (REPOSITORY_ROOT / "Dockerfile.dockerignore").exists()
+
+
+def test_runtime_image_has_no_netcat_database_readiness_dependency() -> None:
+    """Keep database readiness independent of the netcat package."""
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8").casefold()
+
+    assert "netcat" not in dockerfile

@@ -63,8 +63,8 @@ docker compose up --build --wait --wait-timeout 180
 ```
 
 The healthcheck uses Python's standard HTTP client inside the container to call
-`/health`. It reports process liveness; database-aware readiness is a separate
-startup contract.
+`/health`. It reports process liveness after the container entrypoint has
+completed its bounded database readiness check when `DATABASE_URL` is configured.
 
 ---
 

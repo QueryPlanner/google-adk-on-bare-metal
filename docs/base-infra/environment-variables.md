@@ -11,6 +11,34 @@ Complete reference for all environment variables used in this project.
 - **Value:** Postgres connection string (e.g., `postgresql://user:pass@localhost:5432/dbname`)
 - **Purpose:** Persistent storage for agent sessions and memory
 
+Both `ssl=...` and standard `sslmode=...` query options are normalized for the
+consumer that receives the URL. The shared direct-asyncpg and SQLAlchemy path
+also accepts `target_session_attrs`, `krbsrvname`, `gsslib`, and `passfile`.
+The `host` query option is accepted only when the URL authority has no hostname,
+and `port` only when the authority has no port. This supports credentialed
+Unix-socket URLs without allowing query options to override an address. Other
+query keys fail closed because direct asyncpg and SQLAlchemy otherwise interpret
+them differently.
+`channel_binding=require` is accepted for compatibility but is removed because
+the current asyncpg stack does not support that option.
+
+When `DATABASE_URL` is set in the container, the entrypoint verifies a real
+`SELECT 1` before starting the server. Authentication and database-selection
+errors fail immediately; transient connection failures are retried within the
+following bounds:
+
+**DB_READY_TIMEOUT**
+- **Default:** `60`
+- **Purpose:** Maximum total number of seconds spent retrying startup readiness
+
+**DB_READY_RETRY_INTERVAL**
+- **Default:** `1`
+- **Purpose:** Seconds between transient readiness failures
+
+**DB_READY_ATTEMPT_TIMEOUT**
+- **Default:** `5`
+- **Purpose:** Maximum seconds for one connection, query, and close attempt
+
 ### API Keys
 
 **GOOGLE_API_KEY**
