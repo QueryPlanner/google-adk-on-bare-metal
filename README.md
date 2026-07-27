@@ -80,3 +80,10 @@ To change the backend, simply update the OTel exporter configuration in your `.e
 - [Development Guide](docs/development.md)
 - [Architecture](docs/architecture.md)
 - [Observability Setup](docs/base-infra/observability.md)
+
+## Provenance
+
+This template includes material derived from
+[Agent Foundation](https://github.com/doughayden/agent-foundation). See
+[Third-Party Notices](THIRD_PARTY_NOTICES.md) for the pinned source and
+preserved upstream license.
