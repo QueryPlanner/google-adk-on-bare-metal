@@ -2,20 +2,10 @@ name: Code Quality
 
 on:
   push:
-    branches: [ "main", "migration/port-agent-foundation" ]
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'uv.lock'
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'uv.lock'
-  workflow_call: # Allow other workflows to call this
+  workflow_call:
 
 jobs:
   test:
@@ -45,7 +35,7 @@ jobs:
         run: uv run ruff format --check
 
       - name: Run Ruff linting
-        run: uv run ruff check --output-format=github
+        run: uv run ruff check --no-fix --output-format=github
 
       - name: Run MyPy type checking
         run: uv run mypy .
