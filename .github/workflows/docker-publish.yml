@@ -4,6 +4,13 @@ on:
   push:
     branches: [ "main" ]
     tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the main branch to production
+        required: true
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -73,7 +80,10 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.deploy
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to Server
