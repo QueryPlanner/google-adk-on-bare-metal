@@ -8,15 +8,19 @@ import secrets
 import subprocess
 import sys
 import textwrap
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import create_autospec
 from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 import asyncpg  # type: ignore[import-untyped]
 import pytest
+
+from agent import pre_start
 
 _ADMIN_URL_ENV = "TEST_POSTGRES_ADMIN_URL"
 _DATABASE_NAME_PATTERN = re.compile(r"\Aadk_test_[0-9a-f]{32}\Z")
@@ -664,3 +668,115 @@ def test_session_persists_across_server_processes(
     assert restart_result["delete_status"] == 200
     assert restart_result["missing_status"] == 404
     assert _inspect_persisted_row(postgres_database_url) == (0, None)
+
+
+@pytest.mark.asyncio
+async def test_database_readiness_succeeds_with_real_postgres(
+    postgres_database_url: str,
+) -> None:
+    """Prove the production readiness query succeeds against PostgreSQL."""
+    await pre_start.check_database(
+        postgres_database_url,
+        attempt_timeout=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_database_readiness_retries_then_uses_real_driver(
+    postgres_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove one transient boundary failure retries into a real query."""
+    real_connect = asyncpg.connect
+    connect = create_autospec(real_connect, spec_set=True)
+    simulated_attempts = 0
+
+    async def fail_once_then_connect(*args: Any, **kwargs: Any) -> asyncpg.Connection:
+        nonlocal simulated_attempts
+        simulated_attempts += 1
+        if simulated_attempts == 1:
+            raise ConnectionRefusedError("synthetic transient connection failure")
+        return await real_connect(*args, **kwargs)
+
+    connect.side_effect = fail_once_then_connect
+    monkeypatch.setattr(pre_start.asyncpg, "connect", connect)
+
+    attempts = await pre_start.wait_for_database(
+        postgres_database_url,
+        timeout=10,
+        retry_interval=0.01,
+        attempt_timeout=5,
+    )
+
+    assert attempts == 2
+    assert connect.await_count == 2
+
+
+def _wrong_password_database_url(database_url: str) -> str:
+    """Replace only the restricted test role password with another safe value."""
+    parsed = urlsplit(database_url)
+    if parsed.username is None or parsed.password is None:
+        msg = "Isolated PostgreSQL URL must contain role credentials"
+        raise ValueError(msg)
+    database_name = parsed.path.removeprefix("/")
+    wrong_password = "0" * 64
+    if unquote(parsed.password) == wrong_password:
+        wrong_password = "1" * 64
+    return _database_url(
+        database_url,
+        database_name,
+        unquote(parsed.username),
+        wrong_password,
+    )
+
+
+def test_database_readiness_real_auth_failure_is_fast_and_redacted(
+    postgres_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Prove a real permanent auth error is not retried or disclosed."""
+    wrong_password_url = _wrong_password_database_url(postgres_database_url)
+    parsed = urlsplit(wrong_password_url)
+    assert parsed.username is not None
+    assert parsed.password is not None
+
+    real_connect = asyncpg.connect
+    connect = create_autospec(real_connect, spec_set=True)
+
+    async def real_connect_boundary(
+        *args: Any,
+        **kwargs: Any,
+    ) -> asyncpg.Connection:
+        return await real_connect(*args, **kwargs)
+
+    connect.side_effect = real_connect_boundary
+    monkeypatch.setattr(pre_start.asyncpg, "connect", connect)
+    execvp = create_autospec(os.execvp, spec_set=True)
+    monkeypatch.setattr(pre_start.os, "execvp", execvp)
+    monkeypatch.setattr(
+        pre_start.sys,
+        "argv",
+        ["agent.pre_start", "synthetic-command"],
+    )
+    monkeypatch.setenv("DATABASE_URL", wrong_password_url)
+    monkeypatch.setenv("DB_READY_TIMEOUT", "20")
+    monkeypatch.setenv("DB_READY_RETRY_INTERVAL", "0.01")
+    monkeypatch.setenv("DB_READY_ATTEMPT_TIMEOUT", "3")
+
+    started = time.monotonic()
+    with pytest.raises(SystemExit) as error:
+        pre_start.main()
+    elapsed = time.monotonic() - started
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert error.value.code != 0
+    assert connect.await_count == 1
+    execvp.assert_not_called()
+    assert elapsed < 10
+    assert wrong_password_url not in output
+    assert parsed.username not in output
+    assert parsed.password not in output
+    assert unquote(parsed.username) not in output
+    assert unquote(parsed.password) not in output

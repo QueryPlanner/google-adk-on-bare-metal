@@ -2,6 +2,7 @@
 
 from .config import (
     AgentRuntimeEnv,
+    DatabaseReadinessEnv,
     ObservabilityEnv,
     ServerEnv,
     SettingsConfigurationError,
@@ -11,6 +12,7 @@ from .observability import configure_otel_resource, setup_logging
 
 __all__ = [
     "AgentRuntimeEnv",
+    "DatabaseReadinessEnv",
     "ObservabilityEnv",
     "ServerEnv",
     "SettingsConfigurationError",
