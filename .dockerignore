@@ -1,0 +1,28 @@
+# Deny by default; include only inputs consumed by the Dockerfile.
+**
+
+# Build definition and dependency metadata.
+!Dockerfile
+!.dockerignore
+!entrypoint.sh
+!pyproject.toml
+!uv.lock
+
+# Python package source.
+!src/
+!src/agent/
+!src/agent/**
+
+# Never re-include local state nested within an allowed directory.
+**/.adk/
+**/.adk/**
+**/.env
+**/.env.*
+**/.git/
+**/.git/**
+**/.venv/
+**/.venv/**
+**/__pycache__/
+**/__pycache__/**
+**/*.py[cod]
+**/.DS_Store
