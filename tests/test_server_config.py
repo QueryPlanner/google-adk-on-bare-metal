@@ -1,54 +1,58 @@
-"""Tests for server configuration."""
+"""Tests for server bootstrap configuration."""
 
+import importlib
+import os
 import sys
-from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import create_autospec, patch
 
 import pytest
+from fastapi import FastAPI
 
 
-@pytest.fixture
-def mock_dependencies() -> Generator[MagicMock]:
-    """Mock external dependencies to prevent side effects during import."""
+@pytest.mark.parametrize("configured_agent_dir", [None, "/srv/test-agents"])
+def test_server_bootstrap_uses_typed_settings_before_instrumentation(
+    configured_agent_dir: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Verify server, database, agent-dir, and OTel settings are composed."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENT_NAME", "test-agent")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    monkeypatch.setenv("TELEMETRY_NAMESPACE", "test-namespace")
+    if configured_agent_dir is not None:
+        monkeypatch.setenv("AGENT_DIR", configured_agent_dir)
+
+    mock_app = create_autospec(FastAPI, instance=True, spec_set=True)
     with (
-        patch("google.adk.cli.fast_api.get_fast_api_app") as mock_get_app,
-        patch("agent.utils.initialize_environment") as mock_init_env,
-        patch("agent.utils.configure_otel_resource"),
-        patch("openinference.instrumentation.google_adk.GoogleADKInstrumentor"),
-        patch("agent.utils.setup_logging"),
+        patch(
+            "google.adk.cli.fast_api.get_fast_api_app",
+            autospec=True,
+            return_value=mock_app,
+        ) as mock_get_app,
+        patch(
+            "openinference.instrumentation.google_adk.GoogleADKInstrumentor",
+            autospec=True,
+        ) as mock_instrumentor_class,
     ):
-        # Setup basic env mock
-        mock_env = MagicMock()
-        mock_env.session_uri = "postgresql://user:pass@localhost/db"
-        mock_env.allow_origins_list = ["*"]
-        mock_env.serve_web_interface = True
-        mock_env.reload_agents = False
 
-        # Helper to support .host and .port access if needed
-        mock_env.host = "127.0.0.1"
-        mock_env.port = 8080
+        def assert_otel_is_ready() -> None:
+            resource_attributes = os.environ["OTEL_RESOURCE_ATTRIBUTES"]
+            assert "service.name=test-agent" in resource_attributes
+            assert "service.namespace=test-namespace" in resource_attributes
 
-        # DB pool settings
-        mock_env.db_pool_pre_ping = True
-        mock_env.db_pool_recycle = 1800
-        mock_env.db_pool_size = 5
-        mock_env.db_max_overflow = 10
-        mock_env.db_pool_timeout = 30
+        mock_instrumentor_class.return_value.instrument.side_effect = (
+            assert_otel_is_ready
+        )
+        sys.modules.pop("agent.server", None)
+        server = importlib.import_module("agent.server")
 
-        mock_init_env.return_value = mock_env
-
-        yield mock_get_app
-
-
-def test_server_session_db_kwargs_configuration(mock_dependencies: MagicMock) -> None:
-    """Verify session_db_kwargs is configured and passed to get_fast_api_app."""
-    # Ensure agent.server is reloaded if it was already imported
-    if "agent.server" in sys.modules:
-        del sys.modules["agent.server"]
-
-    import agent.server  # noqa: F401
-
-    # expected kwargs
+    server_file = server.__file__
+    assert server_file is not None
+    expected_agent_dir = configured_agent_dir or str(
+        Path(server_file).resolve().parent.parent
+    )
     expected_db_kwargs = {
         "pool_pre_ping": True,
         "pool_recycle": 1800,
@@ -57,9 +61,14 @@ def test_server_session_db_kwargs_configuration(mock_dependencies: MagicMock) ->
         "pool_timeout": 30,
     }
 
-    # Verify the call
-    mock_dependencies.assert_called_once()
-    call_kwargs = mock_dependencies.call_args[1]
-
-    assert "session_db_kwargs" in call_kwargs
+    mock_instrumentor_class.return_value.instrument.assert_called_once_with()
+    mock_get_app.assert_called_once()
+    call_kwargs = mock_get_app.call_args.kwargs
+    assert call_kwargs["agents_dir"] == expected_agent_dir
+    assert call_kwargs["session_service_uri"] == (
+        "postgresql+asyncpg://user:pass@localhost/db"
+    )
     assert call_kwargs["session_db_kwargs"] == expected_db_kwargs
+    assert expected_agent_dir == server.AGENT_DIR
+
+    sys.modules.pop("agent.server", None)
