@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # ============================================================================
+# Shared Base: Single external Python image reference
+# ============================================================================
+FROM python:3.13-slim AS python-base
+
+# ============================================================================
 # Builder Stage: Install dependencies with optimal caching
 # ============================================================================
-FROM python:3.13-slim AS builder
+FROM python-base AS builder
 
 # Install uv
 RUN pip install uv==0.9.26
@@ -34,7 +39,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ============================================================================
 # Runtime Stage: Minimal production image
 # ============================================================================
-FROM python:3.13-slim AS runtime
+FROM python-base AS runtime
 
 # Create non-root user for security (matching common host UID 1000)
 RUN groupadd -g 1000 app && \
