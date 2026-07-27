@@ -1,0 +1,137 @@
+name: Compose Smoke
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Build and smoke-test Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and smoke-test Compose project
+        shell: bash
+        env:
+          COMPOSE_DISABLE_ENV_FILE: "1"
+          IMAGE: google-adk-bare-metal:compose-${{ github.sha }}
+          SMOKE_PROJECT: adk-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+
+          ENV_FILE=""
+          OVERRIDE_FILE=""
+          compose=()
+
+          cleanup() {
+            exit_code=$?
+            down_exit_code=0
+            trap - EXIT INT TERM
+
+            if [ "${#compose[@]}" -gt 0 ]; then
+              if [ "$exit_code" -ne 0 ]; then
+                "${compose[@]}" ps --all || true
+                "${compose[@]}" logs \
+                  --no-color --timestamps --tail=200 agent || true
+              fi
+
+              "${compose[@]}" down \
+                --volumes --remove-orphans --timeout 30 \
+                || down_exit_code=$?
+
+              if [ "$exit_code" -eq 0 ] && [ "$down_exit_code" -ne 0 ]; then
+                exit_code=$down_exit_code
+              fi
+            fi
+
+            if [ -n "$ENV_FILE" ]; then
+              rm -f "$ENV_FILE"
+            fi
+            if [ -n "$OVERRIDE_FILE" ]; then
+              rm -f "$OVERRIDE_FILE"
+            fi
+
+            exit "$exit_code"
+          }
+
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          umask 077
+          ENV_FILE="$(
+            mktemp "${RUNNER_TEMP}/compose-smoke-env.XXXXXX"
+          )"
+          OVERRIDE_FILE="$(
+            mktemp "${RUNNER_TEMP}/compose-smoke-override.XXXXXX.yaml"
+          )"
+          export ENV_FILE
+
+          printf '%s\n' \
+            '# Synthetic secret-free Compose smoke environment' \
+            > "$ENV_FILE"
+
+          cat > "$OVERRIDE_FILE" <<'YAML'
+          services:
+            agent:
+              env_file: !override
+                - ${ENV_FILE:?Set ENV_FILE to the smoke environment}
+              environment:
+                OTEL_SDK_DISABLED: "true"
+                RELOAD_AGENTS: "false"
+                SERVE_WEB_INTERFACE: "false"
+              ports: !override
+                - "127.0.0.1:8080:8080"
+              restart: "no"
+          YAML
+
+          compose=(
+            docker compose
+            --project-name "$SMOKE_PROJECT"
+            --env-file "$ENV_FILE"
+            -f compose.yaml
+            -f "$OVERRIDE_FILE"
+          )
+
+          "${compose[@]}" config --quiet
+          "${compose[@]}" build
+          "${compose[@]}" up \
+            --detach --no-build --wait --wait-timeout 180
+
+          container_id="$("${compose[@]}" ps --all -q agent)"
+          if [ -z "$container_id" ]; then
+            echo "Compose did not create the agent container." >&2
+            exit 1
+          fi
+
+          python3 -c '
+          import json
+          import urllib.request
+
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          with opener.open(
+              "http://127.0.0.1:8080/health", timeout=3
+          ) as response:
+              payload = json.load(response)
+
+          if payload != {"status": "ok"}:
+              raise SystemExit(f"Unexpected health payload: {payload!r}")
+          '
+
+          echo "Compose startup and health checks passed."
