@@ -330,6 +330,36 @@ jobs:
           echo "Artifact storage is unavailable."
           echo "Compose artifact persistence and failure checks passed."
 
+  candidate:
+    name: Validate isolated candidate runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUN_CANDIDATE_INTEGRATION: "1"
+      CANDIDATE_TEST_PROJECT_PREFIX: >-
+        adk-candidate-${{ github.run_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Run isolated candidate proof
+        run: uv run pytest tests/test_candidate_runtime.py -q
+
   trace-gateway:
     name: Validate trace-redaction gateway
     runs-on: ubuntu-latest

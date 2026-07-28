@@ -1,0 +1,74 @@
+x-candidate-environment-file: "${ENV_FILE:?Set ENV_FILE to the candidate environment file}"
+
+services:
+  agent:
+    image: "${IMAGE:?Set IMAGE to the candidate image}"
+    pull_policy: never
+    environment:
+      # Interpolated values come only from a private serializer-produced allowlist.
+      AGENT_NAME: "${AGENT_NAME:?Set AGENT_NAME for the candidate}"
+      ROOT_AGENT_MODEL: "${ROOT_AGENT_MODEL:?Set ROOT_AGENT_MODEL for the candidate}"
+      LOG_LEVEL: "${LOG_LEVEL:?Set LOG_LEVEL for the candidate}"
+      TELEMETRY_NAMESPACE: "${TELEMETRY_NAMESPACE:?Set TELEMETRY_NAMESPACE for the candidate}"
+      K_REVISION: "${K_REVISION:?Set K_REVISION for the candidate}"
+      CANDIDATE_ENV_CANARY: "${CANDIDATE_ENV_CANARY:?Set CANDIDATE_ENV_CANARY for the candidate}"
+      HOST: "127.0.0.1"
+      PORT: "8080"
+      AGENT_DIR: "/app/src"
+      ALLOW_ORIGINS: "[]"
+      SERVE_WEB_INTERFACE: "false"
+      RELOAD_AGENTS: "false"
+      ADK_DISABLE_LOAD_DOTENV: "true"
+      DATABASE_URL: ""
+      AGENT_ENGINE: ""
+      OPENROUTER_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      GEMINI_API_KEY: ""
+      GOOGLE_GENAI_USE_VERTEXAI: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: ""
+      GOOGLE_CLOUD_PROJECT: ""
+      GOOGLE_CLOUD_LOCATION: ""
+      VERTEXAI_PROJECT: ""
+      VERTEXAI_LOCATION: ""
+      MEM0_LLM_API_KEY: ""
+      MEM0_QDRANT_HOST: ""
+      MEM0_QDRANT_PORT: ""
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      LANGFUSE_BASE_URL: ""
+      OTEL_SDK_DISABLED: "true"
+      OTEL_TRACES_EXPORTER: "none"
+      OTEL_METRICS_EXPORTER: "none"
+      OTEL_LOGS_EXPORTER: "none"
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ""
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: ""
+      OTEL_EXPORTER_OTLP_TRACES_HEADERS: ""
+      OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE: ""
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: ""
+      OTEL_GATEWAY_BEARER_TOKEN_FILE: ""
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "false"
+      ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS: "false"
+      OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER: ""
+      OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER: ""
+    network_mode: none
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.build_opener(
+          urllib.request.ProxyHandler({})).open(
+          "http://127.0.0.1:8080/ready", timeout=1).read()
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 10s
