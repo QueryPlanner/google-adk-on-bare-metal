@@ -345,7 +345,7 @@ CMD ["python", "-m", "agent.server"]
 **What:** Default command when container starts
 **Why:**
 - Calls `server.main()` for unified startup logic
-  - Sets up OpenTelemetry observability (traces and logs to your preferred backend)
+  - Sets up optional trace-only OpenTelemetry export over HTTP/protobuf
   - Consistent entry point for both local dev (`uv run server`) and Docker
 - `main()` builds the application with `create_app()` only after storage
   readiness succeeds, then calls `uvicorn.run(app, host=env.host, port=env.port)`

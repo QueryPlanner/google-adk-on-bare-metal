@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from opentelemetry.util.re import parse_env_headers
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings
 
@@ -537,27 +538,29 @@ class TestObservabilityEnv:
     """Tests for settings required before ADK agent loading."""
 
     def test_defaults(self) -> None:
-        """Test vendor-neutral local defaults."""
+        """Keep remote export and content capture disabled by default."""
         env = ObservabilityEnv()
 
         assert env.telemetry_namespace == "local"
         assert env.service_revision == "local"
         assert env.langfuse_public_key is None
         assert env.langfuse_secret_key is None
-        assert env.langfuse_base_url == "https://cloud.langfuse.com"
-        assert env.otel_exporter_otlp_endpoint is None
-        assert env.otel_exporter_otlp_protocol is None
-        assert env.otel_exporter_otlp_headers is None
+        assert env.langfuse_base_url is None
+        assert env.effective_langfuse_base_url == "https://cloud.langfuse.com"
+        assert env.otel_exporter_otlp_traces_endpoint is None
+        assert env.otel_exporter_otlp_traces_protocol is None
+        assert env.otel_exporter_otlp_traces_headers is None
+        assert env.otel_exporter_otlp_traces_timeout is None
+        assert env.effective_otel_exporter_otlp_traces_timeout == 2.0
         assert env.otel_capture_message_content is False
 
-    def test_dotenv_values_are_typed_without_environment_mutation(
+    def test_dotenv_langfuse_values_are_typed_without_environment_mutation(
         self,
         tmp_path: Path,
     ) -> None:
-        """Test observability settings read a real cwd dotenv independently."""
+        """Read one complete Langfuse mode without mutating process settings."""
         public_key = "pk-lf-dotenv-canary"
         secret_key = "sk-lf-dotenv-canary"  # noqa: S105
-        header = "Authorization=dotenv-header-canary"
         (tmp_path / ".env").write_text(
             "\n".join(
                 [
@@ -566,9 +569,6 @@ class TestObservabilityEnv:
                     f"LANGFUSE_PUBLIC_KEY={public_key}",
                     f"LANGFUSE_SECRET_KEY={secret_key}",
                     "LANGFUSE_BASE_URL=https://langfuse.example.test/",
-                    "OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.test",
-                    "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
-                    f"OTEL_EXPORTER_OTLP_HEADERS={header}",
                     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true",
                     "",
                 ]
@@ -585,8 +585,8 @@ class TestObservabilityEnv:
         assert env.langfuse_public_key.get_secret_value() == public_key
         assert env.langfuse_secret_key is not None
         assert env.langfuse_secret_key.get_secret_value() == secret_key
-        assert env.otel_exporter_otlp_headers is not None
-        assert env.otel_exporter_otlp_headers.get_secret_value() == header
+        assert env.langfuse_base_url == "https://langfuse.example.test/"
+        assert env.effective_langfuse_base_url == "https://langfuse.example.test/"
         assert env.otel_capture_message_content is True
         assert dict(os.environ) == original_environment
 
@@ -607,6 +607,365 @@ class TestObservabilityEnv:
 
         assert env.telemetry_namespace == "constructor"
         assert env.service_revision == "process"
+
+    def test_explicit_trace_values_are_normalized_and_redacted(self) -> None:
+        """Accept the one supported explicit HTTP/protobuf configuration."""
+        header = "Authorization=Bearer%20header-secret-canary"
+        env = ObservabilityEnv.model_validate(
+            {
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                    "https://collector.example.test/otel/v1/traces"
+                ),
+                "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "HTTP/PROTOBUF",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": header,
+                "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "1.5",
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+            }
+        )
+
+        assert env.otel_exporter_otlp_traces_endpoint == (
+            "https://collector.example.test/otel/v1/traces"
+        )
+        assert env.otel_exporter_otlp_traces_protocol == "http/protobuf"
+        assert env.otel_exporter_otlp_traces_headers is not None
+        assert env.otel_exporter_otlp_traces_headers.get_secret_value() == header
+        assert env.otel_exporter_otlp_traces_timeout == 1.5
+        assert env.effective_otel_exporter_otlp_traces_timeout == 1.5
+        assert header not in repr(env)
+        assert env.otel_capture_message_content is True
+
+    def test_blank_optional_values_remain_unconfigured(self) -> None:
+        """Treat selected blank optional values as deliberate omissions."""
+        env = ObservabilityEnv.model_validate(
+            {
+                "LANGFUSE_BASE_URL": " ",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "",
+                "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "\t",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": " ",
+                "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "",
+            }
+        )
+
+        assert env.langfuse_base_url is None
+        assert env.otel_exporter_otlp_traces_endpoint is None
+        assert env.otel_exporter_otlp_traces_protocol is None
+        assert env.otel_exporter_otlp_traces_headers is None
+        assert env.otel_exporter_otlp_traces_timeout is None
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"LANGFUSE_PUBLIC_KEY": "pk-only-canary"},
+            {"LANGFUSE_SECRET_KEY": "sk-only-canary"},
+            {"LANGFUSE_BASE_URL": "https://langfuse-base-only.example"},
+            {
+                "LANGFUSE_PUBLIC_KEY": "pk-with-base-canary",
+                "LANGFUSE_BASE_URL": "https://langfuse.example",
+            },
+        ],
+    )
+    def test_incomplete_langfuse_mode_is_rejected_without_disclosure(
+        self,
+        settings: dict[str, str],
+    ) -> None:
+        """Require atomic Langfuse credentials even when a base is supplied."""
+        canaries = tuple(settings.values())
+
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(settings)
+
+        formatted_error = "".join(traceback.format_exception(exc_info.value))
+        assert "requires both" in str(exc_info.value)
+        assert all(canary not in formatted_error for canary in canaries)
+
+    @pytest.mark.parametrize(
+        "langfuse_settings",
+        [
+            {
+                "LANGFUSE_PUBLIC_KEY": "pk-mixed-canary",
+                "LANGFUSE_SECRET_KEY": "sk-mixed-canary",
+            },
+            {"LANGFUSE_BASE_URL": "https://mixed-base.example"},
+        ],
+    )
+    def test_mixed_export_modes_are_rejected_without_disclosure(
+        self,
+        langfuse_settings: dict[str, str],
+    ) -> None:
+        """Never combine derived credentials with an explicit destination."""
+        settings = {
+            **langfuse_settings,
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                "https://collector.example/v1/traces"
+            ),
+        }
+
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(settings)
+
+        formatted_error = "".join(traceback.format_exception(exc_info.value))
+        assert "mutually exclusive" in str(exc_info.value)
+        assert all(value not in formatted_error for value in settings.values())
+
+    @pytest.mark.parametrize(
+        ("option_name", "option_value"),
+        [
+            ("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf"),
+            ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-test=value"),
+        ],
+    )
+    def test_trace_options_without_endpoint_are_rejected(
+        self,
+        option_name: str,
+        option_value: str,
+    ) -> None:
+        """Do not let partial explicit settings fall through to SDK defaults."""
+        with pytest.raises(
+            SettingsConfigurationError, match="require a trace endpoint"
+        ):
+            ObservabilityEnv.model_validate({option_name: option_value})
+
+    def test_trace_timeout_without_remote_mode_is_rejected(self) -> None:
+        """Do not materialize a timeout when no exporter can consume it."""
+        with pytest.raises(
+            SettingsConfigurationError,
+            match="requires a complete remote export mode",
+        ):
+            ObservabilityEnv.model_validate({"OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "1"})
+
+    @pytest.mark.parametrize(
+        "timeout",
+        [0, -1, 2.01, float("inf"), float("nan")],
+    )
+    def test_trace_timeout_must_fit_the_shutdown_budget(self, timeout: float) -> None:
+        """Bound each HTTP attempt so one retry remains inside outer shutdown."""
+        with pytest.raises(ValidationError):
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "https://collector.example/v1/traces"
+                    ),
+                    "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": timeout,
+                }
+            )
+
+    @pytest.mark.parametrize("protocol", ["grpc", "http/json", "\thttp/protobuf"])
+    def test_unsupported_protocol_is_rejected_without_echo(
+        self,
+        protocol: str,
+    ) -> None:
+        """Reject every transport except exact HTTP/protobuf."""
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "https://collector.example/v1/traces"
+                    ),
+                    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": protocol,
+                }
+            )
+
+        assert protocol not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "collector.example/v1/traces",
+            "ftp://collector.example/v1/traces",
+            "https:///v1/traces",
+            "https://user:password@collector.example/v1/traces",
+            "https://collector.example/v1/traces;token=endpoint-canary",
+            "https://collector.example/v1/traces?token=endpoint-canary",
+            "https://collector.example/v1/traces#endpoint-canary",
+            "https://collector.example:invalid/v1/traces",
+            "https://collector.example:0/v1/traces",
+            "http://collector.example/v1/traces",
+            "https://collector.example/%0d%0a/v1/traces",
+            "https://collector .example/v1/traces",
+            "https://collector..example/v1/traces",
+            "https://collector.example../v1/traces",
+            "https://./v1/traces",
+            "https://colléctor.example/v1/traces",
+            (f"https://{'a' * 63}.{'b' * 63}.{'c' * 63}.{'d' * 63}/v1/traces"),
+            "https://-collector.example/v1/traces",
+            "https://collector-.example/v1/traces",
+            "https://collector.example/%ZZ/v1/traces",
+            "https://collector.example/%5C/v1/traces",
+            " https://collector.example/v1/traces",
+            "https://collector.example\\evil/v1/traces",
+        ],
+    )
+    def test_unsafe_explicit_endpoint_is_rejected_without_disclosure(
+        self,
+        endpoint: str,
+    ) -> None:
+        """Reject ambiguous, credential-bearing, or remote plaintext URLs."""
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(
+                {"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": endpoint}
+            )
+
+        formatted_error = "".join(traceback.format_exception(exc_info.value))
+        assert endpoint not in formatted_error
+        assert "password" not in formatted_error
+        assert "endpoint-canary" not in formatted_error
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://collector.example",
+            "https://collector.example/v1/traces/",
+            "https://collector.example/v1/traces/v1/traces",
+        ],
+    )
+    def test_explicit_endpoint_requires_one_exact_trace_suffix(
+        self,
+        endpoint: str,
+    ) -> None:
+        """Prevent missing or doubled HTTP signal paths."""
+        with pytest.raises(SettingsConfigurationError, match="end exactly once"):
+            ObservabilityEnv.model_validate(
+                {"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": endpoint}
+            )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://collector.example/v1/traces",
+            "http://localhost:4318/v1/traces",
+            "http://worker.localhost:4318/v1/traces",
+            "http://127.0.0.1:4318/v1/traces",
+            "http://[::1]:4318/v1/traces",
+        ],
+    )
+    def test_safe_trace_endpoints_are_accepted(self, endpoint: str) -> None:
+        """Allow TLS collectors and explicit loopback-only plaintext."""
+        env = ObservabilityEnv.model_validate(
+            {"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": endpoint}
+        )
+
+        assert env.otel_exporter_otlp_traces_endpoint == endpoint
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            "",
+            "missing-equals",
+            "x-test=value,",
+            "=empty-name",
+            "invalid name=value",
+            "x-test=bad%ZZvalue",
+            "x-test=canary%0D%0AX-Injected%3Ayes",
+            "x-test=✓",
+            'x-test=abc"def',
+            "x-test=abc;def",
+            "x-test=abc\\def",
+            "x-test=abc def",
+            "Authorization=one,authorization=two",
+        ],
+    )
+    def test_malformed_headers_are_rejected_without_disclosure(
+        self,
+        headers: str,
+    ) -> None:
+        """Reject syntax ambiguity, CRLF, and case-insensitive duplicates."""
+        settings = {
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                "https://collector.example/v1/traces"
+            ),
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS": headers,
+        }
+
+        if not headers:
+            env = ObservabilityEnv.model_validate(settings)
+            assert env.otel_exporter_otlp_traces_headers is None
+            return
+
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(settings)
+
+        assert headers not in "".join(traceback.format_exception(exc_info.value))
+
+    def test_valid_encoded_headers_are_accepted(self) -> None:
+        """Accept visible header values and encoded separators."""
+        headers = (
+            "Authorization=Bearer%20credential,"
+            "x-routing=a%2Cb%3Dc,x-empty=,x!token=value,x-path=/v1/traces"
+        )
+        env = ObservabilityEnv.model_validate(
+            {
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                    "https://collector.example/v1/traces"
+                ),
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": headers,
+            }
+        )
+
+        assert env.otel_exporter_otlp_traces_headers is not None
+        assert env.otel_exporter_otlp_traces_headers.get_secret_value() == headers
+        assert parse_env_headers(headers, liberal=True) == {
+            "authorization": "Bearer credential",
+            "x-routing": "a,b=c",
+            "x-empty": "",
+            "x!token": "value",
+            "x-path": "/v1/traces",
+        }
+
+    @pytest.mark.parametrize(
+        ("source", "unsupported_name"),
+        [
+            ("constructor", "OTEL_EXPORTER_OTLP_ENDPOINT"),
+            ("process", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"),
+            ("dotenv", "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"),
+        ],
+    )
+    def test_unvalidated_otlp_variables_are_rejected_from_every_source(
+        self,
+        source: str,
+        unsupported_name: str,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Allowlist only the four validated trace exporter variables."""
+        canary = "unsupported-setting-canary"
+        constructor_values: dict[str, str] = {}
+        if source == "constructor":
+            constructor_values[unsupported_name] = canary
+        elif source == "process":
+            monkeypatch.setenv(unsupported_name, canary)
+        else:
+            (tmp_path / ".env").write_text(
+                f"{unsupported_name}={canary}\n",
+                encoding="utf-8",
+            )
+
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(constructor_values)
+
+        formatted_error = "".join(traceback.format_exception(exc_info.value))
+        assert unsupported_name not in formatted_error
+        assert canary not in formatted_error
+
+    @pytest.mark.parametrize("_source_override", ["_env_file", "_secrets_dir"])
+    def test_per_instance_settings_source_overrides_are_rejected(
+        self,
+        _source_override: str,
+        tmp_path: Path,
+    ) -> None:
+        """Keep the OTLP allowlist on the documented settings sources."""
+        source_path = tmp_path / "alternate-source"
+        source_path.write_text(
+            "OTEL_EXPORTER_OTLP_ENDPOINT=https://unsafe.example\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            SettingsConfigurationError,
+            match="settings source overrides are not supported",
+        ) as exc_info:
+            ObservabilityEnv(**{_source_override: source_path})
+
+        assert str(source_path) not in str(exc_info.value)
 
 
 class TestInitializeEnvironment:

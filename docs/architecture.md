@@ -13,7 +13,8 @@ Google ADK is useful even without Google Cloud:
 - **Entry point**: `python -m agent.server`
   - Wraps `google.adk.cli.fast_api.get_fast_api_app(...)`
   - Uses a Postgres-backed session store when `DATABASE_URL` is configured
-  - Configures OpenTelemetry for vendor-neutral tracing (Langfuse auto-config included)
+  - Lets ADK own the process-wide OpenTelemetry provider and internal processors
+  - Optionally configures one trace-only OTLP/HTTP exporter
 - **Agents directory**: `src/`
   - ADK Dev UI lists *directories* under `agents_dir`.
 - **Main Agent**: `src/agent/agent.py`
@@ -35,6 +36,31 @@ without pretending the process has died. The readiness check intentionally does
 not create another persistent connection pool. It proves current PostgreSQL
 connectivity and credentials, not ADK pool capacity, schema compatibility,
 Agent Engine, models, tools, or artifact capacity after startup.
+
+### Trace observability boundary
+
+Resource and privacy settings are validated before the ADK FastAPI factory runs.
+ADK then creates the sole global `TracerProvider`, preserves its internal trace
+processors, and adds one outbound batch processor only when one complete remote
+trace mode is configured. The template does not replace or shut down that
+provider.
+
+Remote export supports OTLP traces over `http/protobuf`. It does not configure
+OTLP metrics or logs, HTTP server spans, log correlation, Cloud Trace, Cloud
+Logging, or a bundled collector. Structured message and tool payload fields are
+elided by default, but exception content, static descriptions, and operational
+metadata—including session or conversation identifiers—can still be exported.
+
+Every remote request has a two-second effective timeout.
+`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` can supply a finite value greater than zero
+and at most two seconds alongside either complete remote mode, but cannot select
+a mode by itself. This budget is designed to fit the HTTP exporter's single
+`ConnectionError` retry inside the five-second outer flush and leave additional
+room within Compose's ten-second termination grace period.
+
+The provider is process-global, so the deployment contract is one server
+process started with `python -m agent.server` or `uv run server`. Pre-fork and
+multi-worker server modes are outside this template's tested boundary.
 
 ### What ADK uses the database for
 

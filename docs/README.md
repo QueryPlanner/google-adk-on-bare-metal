@@ -43,5 +43,5 @@ docs/
 - [Docker Compose Workflow](base-infra/docker-compose-workflow.md) - Local development
 
 ### Production
-- [Observability](base-infra/observability.md) - Traces and logs
+- [Observability](base-infra/observability.md) - Trace export and privacy
 - [Dockerfile Strategy](base-infra/dockerfile-strategy.md) - Build optimization

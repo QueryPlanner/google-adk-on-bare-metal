@@ -24,9 +24,23 @@ Create `.env` in the project root:
 - `DATABASE_URL`: Postgres URL for sessions (required for persistence)
 
 Observability (Optional):
-- `LANGFUSE_PUBLIC_KEY`: Langfuse Public Key
-- `LANGFUSE_SECRET_KEY`: Langfuse Secret Key
-- `LANGFUSE_BASE_URL`: Langfuse Host (default: EU)
+
+- Leave all remote-export values unset for ADK-local tracing only.
+- For Langfuse, set both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`;
+  `LANGFUSE_BASE_URL` defaults to `https://cloud.langfuse.com`.
+- For another OTLP/HTTP collector, set the complete
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and optionally
+  `OTEL_EXPORTER_OTLP_TRACES_HEADERS`. The only supported protocol is
+  `http/protobuf`.
+- Either complete remote mode may set `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`.
+  It defaults to `2` seconds and must be finite, greater than `0`, and at most
+  `2`; timeout alone is incomplete and does not enable export.
+- Do not combine the Langfuse and explicit OTLP modes. Legacy generic
+  `OTEL_EXPORTER_OTLP_{ENDPOINT,PROTOCOL,HEADERS}` values are rejected.
+- `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` defaults to `false`.
+  Setting it to `true` is an explicit privacy-sensitive opt-in for structured
+  prompt/response fields and tool argument/result attributes. Even when false,
+  exception text, static descriptions, and identifiers can still export.
 
 Optional:
 

@@ -49,6 +49,14 @@ def test_agent_healthcheck_has_exact_database_readiness_contract() -> None:
     assert healthcheck_block == EXPECTED_HEALTHCHECK_BLOCK
 
 
+def test_agent_has_bounded_graceful_shutdown_window() -> None:
+    """Give telemetry a bounded flush window before Compose sends SIGKILL."""
+    document = COMPOSE_PATH.read_text(encoding="utf-8")
+    agent_block = _indented_block(document, "agent:", 2)
+
+    assert agent_block.splitlines().count("    stop_grace_period: 10s") == 1
+
+
 def test_operator_guides_wait_for_container_health() -> None:
     """Document a bounded startup command wherever operators start Compose."""
     guide_paths = [DEPLOYMENT_GUIDE_PATH, COMPOSE_GUIDE_PATH, README_PATH]

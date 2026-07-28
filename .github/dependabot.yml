@@ -16,7 +16,7 @@ updates:
       - dependency-name: "opentelemetry-exporter-gcp-logging"
         update-types:
           - "version-update:semver-minor"
-      - dependency-name: "opentelemetry-exporter-otlp-proto-grpc"
+      - dependency-name: "opentelemetry-exporter-otlp-proto-http"
         update-types:
           - "version-update:semver-minor"
       - dependency-name: "opentelemetry-instrumentation-logging"
