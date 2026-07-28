@@ -23,7 +23,7 @@ dependencies = [
     "asyncpg>=0.30.0",
     "greenlet>=3.0.0",
     "langfuse>=3.12.0",
-    "openinference-instrumentation-google-adk>=0.1.8",
+    "openinference-instrumentation-google-adk>=0.1.17",
     "mem0ai>=0.1.0",
     "fastembed>=0.8.0",
 ]
