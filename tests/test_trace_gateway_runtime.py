@@ -439,12 +439,15 @@ CRAFTED_SENDER = textwrap.dedent(
             context=context,
             timeout=5,
         )
+        stage = "connect"
         try:
+            connection.connect()
             # An empty protobuf message is a valid OTLP request. If the invalid
             # token were accepted, this would return 200 instead of 401.
             auth_payload = ExportTraceServiceRequest().SerializeToString()
             if auth_payload != b"":
                 raise SystemExit("empty-otlp-precondition-failed")
+            stage = "request"
             connection.request(
                 "POST",
                 "/v1/traces",
@@ -454,15 +457,22 @@ CRAFTED_SENDER = textwrap.dedent(
                     "Content-Type": "application/x-protobuf",
                 },
             )
+            stage = "response"
             response = connection.getresponse()
             try:
+                stage = "status"
                 status = response.status
             finally:
+                stage = "response-close"
                 response.close()
+            stage = "complete"
         except (HTTPException, OSError):
-            raise SystemExit("auth-transport-failed") from None
+            raise SystemExit(f"auth-{stage}-failed") from None
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except OSError:
+                raise SystemExit("auth-connection-close-failed") from None
         if status != 401:
             raise SystemExit("unexpected-auth-status")
         print("auth-rejected")
