@@ -62,16 +62,24 @@ We've simplified deployment to the absolute basics. No Kubernetes required.
 Every successful Docker Publish workflow on `main` publishes an image for that
 repository. From the cloned repository on your server, create `.env`, then
 replace both placeholders below with the lowercase owner and repository that
-published the image. The export is session-scoped, so repeat it in each new
-deployment shell.
+published the image, and replace the digest placeholder with the lowercase
+OCI digest from the Docker Publish workflow summary. Tags such as `main` can
+move; the digest is the immutable deployment identity. The export is
+session-scoped, so repeat it in each new deployment shell.
 
 ```bash
-export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>:main"
+export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>@sha256:<64-lowercase-hex>"
 docker compose pull && docker compose up --no-build --wait --wait-timeout 180
 ```
 
 Public GHCR packages can be pulled anonymously. Private packages require the
 least-privilege login described in the full deployment guide.
+
+When `Docker Publish` is manually dispatched from `main` with deployment
+enabled, it binds the rollout to the workflow commit SHA and that run's build
+digest. The VM checks out the commit in detached mode, uses only the tracked
+`compose.yaml`, and verifies the running image reference and OCI revision before
+the deployment succeeds.
 
 ### Option 2: Build Yourself
 
