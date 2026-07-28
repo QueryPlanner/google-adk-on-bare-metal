@@ -30,6 +30,17 @@ IMAGE_REFERENCE = f"ghcr.io/queryplanner/agent@sha256:{'e' * 64}"
 PROJECT = "adk-template"
 SERVICE = "agent"
 SECRET_ENVIRONMENT = b'API_KEY="secret-observation-canary"\n'
+HOST_ENVIRONMENT_NAMES = (
+    "HOME",
+    "PATH",
+    "DOCKER_CONFIG",
+    "DOCKER_HOST",
+    "XDG_RUNTIME_DIR",
+)
+DEFAULT_HOST_ENVIRONMENT = {
+    "PATH": "/usr/bin:/bin",
+    "DOCKER_CONFIG": "/private/docker-config",
+}
 
 
 def _completed(
@@ -64,6 +75,9 @@ class ObservationBoundary:
     image_document: object = field(default_factory=dict)
     fail_command: tuple[str, ...] | None = None
     calls: list[tuple[str, ...]] = field(default_factory=list)
+    expected_host_environment: dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_HOST_ENVIRONMENT)
+    )
 
     def __post_init__(self) -> None:
         if self.top_level is None:
@@ -128,11 +142,9 @@ class ObservationBoundary:
         assert env["LANG"] == "C"
         assert "GIT_DIR" not in env
         assert "OPENROUTER_API_KEY" not in env
-        assert env["DOCKER_CONFIG"] == "/private/docker-config"
-        if "DOCKER_HOST" in os.environ:
-            assert env["DOCKER_HOST"] == os.environ["DOCKER_HOST"]
-        if "XDG_RUNTIME_DIR" in os.environ:
-            assert env["XDG_RUNTIME_DIR"] == os.environ["XDG_RUNTIME_DIR"]
+        assert {
+            name: env[name] for name in HOST_ENVIRONMENT_NAMES if name in env
+        } == self.expected_host_environment
 
         selected = tuple(command)
         self.calls.append(selected)
@@ -215,6 +227,13 @@ class ObservationHarness:
     boundary: ObservationBoundary
 
     def arguments(self) -> dict[str, object]:
+        environment = dict(self.boundary.expected_host_environment)
+        environment.update(
+            {
+                "GIT_DIR": "secret-git-override",
+                "LANG": "host-locale",
+            }
+        )
         return {
             "checkout_path": self.checkout,
             "expected_origin": ORIGIN,
@@ -223,12 +242,7 @@ class ObservationHarness:
             "environment_path": self.environment_path,
             "git_executable": self.git,
             "docker_executable": self.docker,
-            "environment": {
-                "PATH": "/usr/bin:/bin",
-                "DOCKER_CONFIG": "/private/docker-config",
-                "GIT_DIR": "secret-git-override",
-                "LANG": "host-locale",
-            },
+            "environment": environment,
         }
 
 
@@ -760,6 +774,11 @@ def test_default_process_environment_is_sanitized(
     """Exercise the production environment path without preserving Git overrides."""
     arguments = observation_harness.arguments()
     arguments["environment"] = None
+    observation_harness.boundary.expected_host_environment = {
+        "DOCKER_CONFIG": "/private/docker-config",
+        "DOCKER_HOST": "unix:///private/docker.sock",
+        "XDG_RUNTIME_DIR": "/private/runtime",
+    }
 
     with patch.dict(
         os.environ,
@@ -773,6 +792,22 @@ def test_default_process_environment_is_sanitized(
         clear=True,
     ):
         observation = _observe(observation_harness, arguments=arguments)
+
+    assert observation is not None
+
+
+def test_explicit_host_environment_ignores_process_optional_fields(
+    observation_harness: ObservationHarness,
+) -> None:
+    """Derive optional Docker fields from the explicit source, not the process."""
+    with patch.dict(
+        os.environ,
+        {
+            "DOCKER_HOST": "unix:///process/docker.sock",
+            "XDG_RUNTIME_DIR": "/process/runtime",
+        },
+    ):
+        observation = _observe(observation_harness)
 
     assert observation is not None
 

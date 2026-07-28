@@ -92,6 +92,7 @@ def test_promotion_job_has_one_unique_explicit_opt_in_namespace() -> None:
 def test_runtime_uses_one_real_base_and_three_thin_immutable_releases() -> None:
     """Build the real app once, then vary only wrapper and OCI revision layers."""
     source = RUNTIME_PATH.read_text(encoding="utf-8")
+    release_builder = _function_source(source, "_build_release_image")
     runtime = _function_source(
         source,
         "test_real_docker_promotes_then_restores_exact_verified_baseline",
@@ -108,6 +109,9 @@ def test_runtime_uses_one_real_base_and_three_thin_immutable_releases() -> None:
     assert '("failing", failing_tag, failing_revision)' in runtime
     assert "FROM ${BASE_IMAGE}" in source
     assert 'LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"' in source
+    assert 'CMD ["python", "-m", "agent.server"]' in source
+    assert '"{{json .Config.Cmd}}"' in release_builder
+    assert 'configured_command == ["python", "-m", "agent.server"]' in release_builder
     assert "IMAGE_REFERENCE_PATTERN.fullmatch(exact_reference)" in source
     assert '"image", "pull", config.image_reference' not in runtime
 

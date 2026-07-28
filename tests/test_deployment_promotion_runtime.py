@@ -106,6 +106,8 @@ RUN chmod 0755 /usr/local/bin/promotion-wrapper
 LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
 USER app
 ENTRYPOINT ["/usr/local/bin/promotion-wrapper"]
+# Docker clears an inherited CMD when a child image sets ENTRYPOINT.
+CMD ["python", "-m", "agent.server"]
 """
 
 PROMOTION_WRAPPER = """\
@@ -489,6 +491,21 @@ def _build_release_image(
         timeout=30,
     ).stdout.strip()
     assert inspected == image_id
+    configured_command = json.loads(
+        _run(
+            [
+                docker,
+                "image",
+                "inspect",
+                "--format",
+                "{{json .Config.Cmd}}",
+                tag,
+            ],
+            environment=environment,
+            timeout=30,
+        ).stdout
+    )
+    assert configured_command == ["python", "-m", "agent.server"]
     return image_id
 
 

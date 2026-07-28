@@ -1693,24 +1693,71 @@ def test_run_redacts_process_failures_and_bounds_output(
 ) -> None:
     executable = tmp_path / "tool"
     executable.touch()
+    secret = f"private-{tmp_path.name}"
     real_run = subprocess.run
     timeout_mock = create_autospec(
         real_run,
         spec_set=True,
-        side_effect=subprocess.TimeoutExpired(["tool"], 1),
+        side_effect=subprocess.TimeoutExpired(
+            ["tool", secret],
+            1,
+            output=secret,
+            stderr=secret,
+        ),
     )
     monkeypatch.setattr(subprocess, "run", timeout_mock)
-    with pytest.raises(promotion_module.PromotionError, match="command failed"):
-        promotion_module._run(executable, (), environment={})
+    with pytest.raises(promotion_module.PromotionError) as timeout_error:
+        promotion_module._run(
+            executable,
+            (secret,),
+            operation=promotion_module.CommandOperation.CANDIDATE_START,
+            environment={"PRIVATE": secret},
+        )
+    assert str(timeout_error.value) == (
+        "deployment command timed out during candidate Compose start"
+    )
+    assert secret not in str(timeout_error.value)
 
     failed_mock = create_autospec(
         real_run,
         spec_set=True,
-        return_value=subprocess.CompletedProcess(["tool"], 9, "", "private"),
+        return_value=subprocess.CompletedProcess(
+            ["tool", secret],
+            9,
+            secret,
+            secret,
+        ),
     )
     monkeypatch.setattr(subprocess, "run", failed_mock)
-    with pytest.raises(promotion_module.PromotionError, match="command failed"):
-        promotion_module._run(executable, (), environment={})
+    with pytest.raises(promotion_module.PromotionError) as failed_error:
+        promotion_module._run(
+            executable,
+            (secret,),
+            operation=promotion_module.CommandOperation.CANDIDATE_START,
+            environment={"PRIVATE": secret},
+        )
+    assert str(failed_error.value) == (
+        "deployment command failed during candidate Compose start (exit 9)"
+    )
+    assert secret not in str(failed_error.value)
+
+    os_error_mock = create_autospec(
+        real_run,
+        spec_set=True,
+        side_effect=OSError(secret),
+    )
+    monkeypatch.setattr(subprocess, "run", os_error_mock)
+    with pytest.raises(promotion_module.PromotionError) as os_error:
+        promotion_module._run(
+            executable,
+            (secret,),
+            operation=promotion_module.CommandOperation.CANDIDATE_START,
+            environment={"PRIVATE": secret},
+        )
+    assert str(os_error.value) == (
+        "deployment command could not start during candidate Compose start"
+    )
+    assert secret not in str(os_error.value)
 
     large_mock = create_autospec(
         real_run,
@@ -1724,7 +1771,12 @@ def test_run_redacts_process_failures_and_bounds_output(
     )
     monkeypatch.setattr(subprocess, "run", large_mock)
     with pytest.raises(promotion_module.PromotionError, match="too large"):
-        promotion_module._run(executable, (), environment={})
+        promotion_module._run(
+            executable,
+            (),
+            operation=promotion_module.CommandOperation.CANDIDATE_START,
+            environment={},
+        )
 
 
 def test_missing_environment_and_line_injection_are_redacted(
@@ -2285,7 +2337,12 @@ def test_run_bounds_stderr_output(
     )
     monkeypatch.setattr(subprocess, "run", run_mock)
     with pytest.raises(promotion_module.PromotionError, match="too large"):
-        promotion_module._run(executable, (), environment={})
+        promotion_module._run(
+            executable,
+            (),
+            operation=promotion_module.CommandOperation.CANDIDATE_START,
+            environment={},
+        )
 
 
 def test_main_redacts_real_host_oserror(

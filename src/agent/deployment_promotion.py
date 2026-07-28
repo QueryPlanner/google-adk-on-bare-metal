@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Final
 
@@ -116,6 +117,27 @@ class PromotionRecoveryRequiredError(PromotionError):
 
 class PromotionRecoveryFailedError(PromotionError):
     """Report recovery that could not prove the recorded baseline."""
+
+
+class CommandOperation(StrEnum):
+    """Fixed, secret-free labels for external promotion boundaries."""
+
+    GIT_METADATA = "Git metadata read"
+    GIT_DIFF = "Git checkout diff"
+    GIT_STATUS = "Git release status"
+    GIT_MANIFEST = "Git release manifest"
+    GIT_CHECKOUT = "Git production checkout"
+    IMAGE_PULL = "Docker image pull"
+    IMAGE_INSPECT = "Docker image inspect"
+    CONTAINER_LIST = "Docker container list"
+    CONTAINER_INSPECT = "Docker container inspect"
+    CONTAINER_REMOVE = "Docker container removal"
+    VOLUME_INSPECT = "Docker volume inspect"
+    CANDIDATE_CONFIG = "candidate Compose validation"
+    CANDIDATE_START = "candidate Compose start"
+    CANDIDATE_CLEANUP = "candidate Compose cleanup"
+    PRODUCTION_CONFIG = "production Compose validation"
+    PRODUCTION_START = "production Compose start"
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +287,7 @@ def _run(
     executable: Path,
     arguments: Sequence[str],
     *,
+    operation: CommandOperation,
     environment: Mapping[str, str],
     cwd: Path | None = None,
     accepted_returncodes: frozenset[int] = frozenset({0}),
@@ -280,15 +303,26 @@ def _run(
             check=False,
             timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        raise PromotionError("deployment command failed") from None
+    except subprocess.TimeoutExpired:
+        raise PromotionError(
+            f"deployment command timed out during {operation.value}"
+        ) from None
+    except OSError:
+        raise PromotionError(
+            f"deployment command could not start during {operation.value}"
+        ) from None
     if result.returncode not in accepted_returncodes:
-        raise PromotionError("deployment command failed")
+        raise PromotionError(
+            "deployment command failed during "
+            f"{operation.value} (exit {result.returncode})"
+        )
     if (
         len(result.stdout.encode()) > _MAX_COMMAND_OUTPUT_BYTES
         or len(result.stderr.encode()) > _MAX_COMMAND_OUTPUT_BYTES
     ):
-        raise PromotionError("deployment command output is too large")
+        raise PromotionError(
+            f"deployment command output is too large during {operation.value}"
+        )
     return result
 
 
@@ -345,6 +379,7 @@ def _git_line(
         _run(
             executables.git,
             ["-C", str(checkout), *arguments],
+            operation=CommandOperation.GIT_METADATA,
             environment=environment,
         ).stdout,
         field,
@@ -401,6 +436,7 @@ def _validate_release_checkout(
         result = _run(
             executables.git,
             ["-C", str(config.release_checkout), *arguments],
+            operation=CommandOperation.GIT_DIFF,
             environment=environment,
             accepted_returncodes=frozenset({0, 1}),
         )
@@ -416,6 +452,7 @@ def _validate_release_checkout(
             "--untracked-files=all",
             "--ignored=matching",
         ],
+        operation=CommandOperation.GIT_STATUS,
         environment=environment,
     )
     if status.stdout:
@@ -432,6 +469,7 @@ def _validate_release_checkout(
             "compose.candidate.yaml",
             "src/agent/deployment_promotion.py",
         ],
+        operation=CommandOperation.GIT_MANIFEST,
         environment=environment,
     )
 
@@ -477,6 +515,7 @@ def _validate_production_checkout(
         result = _run(
             executables.git,
             ["-C", str(config.checkout), *arguments],
+            operation=CommandOperation.GIT_DIFF,
             environment=environment,
             accepted_returncodes=frozenset({0, 1}),
         )
@@ -533,6 +572,7 @@ def _validate_pending_ownership(
         _run(
             executables.docker,
             ["container", "inspect", ids[0]],
+            operation=CommandOperation.CONTAINER_INSPECT,
             environment=environment,
         ).stdout,
         "pending production container",
@@ -577,6 +617,7 @@ def _inspect_image(
         _run(
             executables.docker,
             ["image", "inspect", proof_reference],
+            operation=CommandOperation.IMAGE_INSPECT,
             environment=environment,
         ).stdout,
         "image",
@@ -611,6 +652,7 @@ def _pull_and_prove_image(
     _run(
         executables.docker,
         ["image", "pull", config.image_reference],
+        operation=CommandOperation.IMAGE_PULL,
         environment=environment,
     )
     return _inspect_image(
@@ -641,6 +683,7 @@ def _container_ids(
             "--format",
             "{{.ID}}",
         ],
+        operation=CommandOperation.CONTAINER_LIST,
         environment=environment,
     )
     values = tuple(line for line in result.stdout.splitlines() if line)
@@ -681,6 +724,7 @@ def _volume_proofs(
             _run(
                 executables.docker,
                 ["volume", "inspect", name],
+                operation=CommandOperation.VOLUME_INSPECT,
                 environment=environment,
             ).stdout,
             "volume",
@@ -744,6 +788,7 @@ def _inspect_container(
         _run(
             executables.docker,
             ["container", "inspect", container_id],
+            operation=CommandOperation.CONTAINER_INSPECT,
             environment=environment,
         ).stdout,
         "container",
@@ -1042,6 +1087,7 @@ def _run_candidate(
             _run(
                 executables.docker,
                 [*prefix[1:], "config", "--quiet"],
+                operation=CommandOperation.CANDIDATE_CONFIG,
                 environment=candidate_environment,
             )
             started = True
@@ -1059,6 +1105,7 @@ def _run_candidate(
                     "60",
                     config.compose_service,
                 ],
+                operation=CommandOperation.CANDIDATE_START,
                 environment=candidate_environment,
             )
             ids = _container_ids(
@@ -1098,6 +1145,7 @@ def _run_candidate(
                     _run(
                         executables.docker,
                         [*prefix[1:], "down", "--remove-orphans"],
+                        operation=CommandOperation.CANDIDATE_CLEANUP,
                         environment=candidate_environment,
                     )
                     if _container_ids(
@@ -1138,6 +1186,7 @@ def _checkout_revision(
             "--detach",
             revision,
         ],
+        operation=CommandOperation.GIT_CHECKOUT,
         environment=environment,
     )
     actual = _git_line(
@@ -1163,6 +1212,7 @@ def _checkout_revision(
         result = _run(
             executables.git,
             ["-C", str(checkout), *arguments],
+            operation=CommandOperation.GIT_DIFF,
             environment=environment,
             accepted_returncodes=frozenset({0, 1}),
         )
@@ -1191,6 +1241,7 @@ def _compose_up(
     configured = _run(
         executables.docker,
         [*prefix[1:], "config", "--images"],
+        operation=CommandOperation.PRODUCTION_CONFIG,
         environment=compose_environment,
     ).stdout.splitlines()
     if configured != [image_reference]:
@@ -1213,6 +1264,7 @@ def _compose_up(
             "180",
             config.compose_service,
         ],
+        operation=CommandOperation.PRODUCTION_START,
         environment=compose_environment,
     )
 
@@ -1242,6 +1294,7 @@ def _remove_owned_service_container(
         _run(
             executables.docker,
             ["container", "inspect", ids[0]],
+            operation=CommandOperation.CONTAINER_INSPECT,
             environment=environment,
         ).stdout,
         "fresh-install container",
@@ -1279,6 +1332,7 @@ def _remove_owned_service_container(
     _run(
         executables.docker,
         ["container", "rm", "--force", full_id],
+        operation=CommandOperation.CONTAINER_REMOVE,
         environment=environment,
     )
 
