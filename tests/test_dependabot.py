@@ -22,6 +22,46 @@ EXPECTED_POLICIES = {
     ("docker", "/"): ("weekly", 2, "build(deps)"),
     ("docker-compose", "/"): ("weekly", 1, "build(deps)"),
 }
+EXPECTED_IGNORES = {
+    ("uv", "/"): [
+        {
+            "dependency-name": "*",
+            "update-types": ["version-update:semver-major"],
+        },
+        {
+            "dependency-name": "opentelemetry-exporter-gcp-logging",
+            "update-types": ["version-update:semver-minor"],
+        },
+        {
+            "dependency-name": "opentelemetry-exporter-otlp-proto-grpc",
+            "update-types": ["version-update:semver-minor"],
+        },
+        {
+            "dependency-name": "opentelemetry-instrumentation-logging",
+            "update-types": ["version-update:semver-minor"],
+        },
+    ],
+    ("github-actions", "/"): [
+        {
+            "dependency-name": "*",
+            "update-types": ["version-update:semver-major"],
+        },
+    ],
+    ("docker", "/"): [
+        {
+            "dependency-name": "python",
+            "update-types": [
+                "version-update:semver-minor",
+                "version-update:semver-major",
+            ],
+        },
+    ],
+}
+SUPPORTED_UPDATE_TYPES = {
+    "version-update:semver-patch",
+    "version-update:semver-minor",
+    "version-update:semver-major",
+}
 BASE_UPDATE_KEYS = {
     "package-ecosystem",
     "directory",
@@ -32,7 +72,6 @@ BASE_UPDATE_KEYS = {
 FORBIDDEN_UPDATE_KEYS = {
     "allow",
     "groups",
-    "ignore",
     "insecure-external-code-execution",
     "multi-ecosystem-group",
     "registries",
@@ -143,6 +182,8 @@ def test_configuration_has_exact_individual_update_policy() -> None:
         expected_keys = BASE_UPDATE_KEYS | (
             {"exclude-paths"} if key == ("docker", "/") else set()
         )
+        if key in EXPECTED_IGNORES:
+            expected_keys.add("ignore")
 
         assert set(update) == expected_keys
         assert FORBIDDEN_UPDATE_KEYS.isdisjoint(update)
@@ -150,8 +191,49 @@ def test_configuration_has_exact_individual_update_policy() -> None:
         assert type(update["open-pull-requests-limit"]) is int
         assert update["open-pull-requests-limit"] == pull_request_limit
         assert update["commit-message"] == {"prefix": commit_prefix}
+        if key in EXPECTED_IGNORES:
+            assert update["ignore"] == EXPECTED_IGNORES[key]
 
     assert updates[("docker", "/")]["exclude-paths"] == ["compose.yaml"]
+
+
+def test_ignore_policy_is_narrow_and_version_only() -> None:
+    """Keep resolver safeguards explicit without hiding security updates."""
+    updates = _updates_by_ecosystem(_load_configuration())
+
+    for key, expected_conditions in EXPECTED_IGNORES.items():
+        conditions = updates[key]["ignore"]
+        assert isinstance(conditions, list)
+        assert conditions == expected_conditions
+
+        dependency_names: set[str] = set()
+        for condition in conditions:
+            assert isinstance(condition, dict)
+            assert set(condition) == {"dependency-name", "update-types"}
+
+            dependency_name = condition["dependency-name"]
+            update_types = condition["update-types"]
+            assert isinstance(dependency_name, str)
+            assert dependency_name not in dependency_names
+            dependency_names.add(dependency_name)
+            assert isinstance(update_types, list)
+            assert update_types
+            assert len(update_types) == len(set(update_types))
+            assert set(update_types) <= SUPPORTED_UPDATE_TYPES
+            assert all(isinstance(update_type, str) for update_type in update_types)
+
+    uv_dependency_names = {
+        condition["dependency-name"] for condition in EXPECTED_IGNORES[("uv", "/")]
+    }
+    assert "google-adk" not in uv_dependency_names
+    assert "opentelemetry-*" not in uv_dependency_names
+    assert "versions" not in {
+        key
+        for conditions in EXPECTED_IGNORES.values()
+        for condition in conditions
+        for key in condition
+    }
+    assert "ignore" not in updates[("docker-compose", "/")]
 
 
 def test_configuration_targets_real_supported_manifests() -> None:
@@ -160,6 +242,22 @@ def test_configuration_targets_real_supported_manifests() -> None:
     assert LOCKFILE_PATH.is_file()
 
     project = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    assert project["project"]["requires-python"] == ">=3.13,<3.14"
+    project_dependencies = project["project"]["dependencies"]
+    direct_dependency_names = {
+        re.split(r"[<>=!~ ;\[]", dependency, maxsplit=1)[0]
+        .strip()
+        .lower()
+        .replace("_", "-")
+        for dependency in project_dependencies
+    }
+    uv_ignore_names = {
+        condition["dependency-name"]
+        for condition in EXPECTED_IGNORES[("uv", "/")]
+        if condition["dependency-name"] != "*"
+    }
+    assert uv_ignore_names <= direct_dependency_names
+
     development_dependencies = project["dependency-groups"]["dev"]
     assert "pyyaml>=6.0.3,<7.0.0" in development_dependencies
 
@@ -177,7 +275,7 @@ def test_configuration_targets_real_supported_manifests() -> None:
 
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
     assert re.search(
-        r"(?mi)^FROM\s+python:[^\s]+\s+AS\s+python-base\s*$",
+        r"(?mi)^FROM\s+python:3\.13(?:\.\d+)?-slim\s+AS\s+python-base\s*$",
         dockerfile,
     )
 
