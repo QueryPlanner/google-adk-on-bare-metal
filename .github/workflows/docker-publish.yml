@@ -93,10 +93,12 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -eu
+
             # 1. Set dynamic project directory based on repository name
             PROJECT_NAME="${{ github.event.repository.name }}"
-            PROJECT_DIR="\$HOME/$PROJECT_NAME"
-            IMAGE_NAME="ghcr.io/${{ github.repository }}:main"
+            PROJECT_DIR="$HOME/$PROJECT_NAME"
+            IMAGE_NAME="$(printf '%s' "ghcr.io/${{ github.repository }}:main" | tr '[:upper:]' '[:lower:]')"
 
             # 2. Ensure project directory exists
             if [ ! -d "$PROJECT_DIR" ]; then
@@ -110,7 +112,7 @@ jobs:
 
             # 4. Inject Secrets into .env (Automated Configuration)
             echo "Generating .env file from GitHub Secrets..."
-            cat <<EOF > .env
+            cat <<'ENV_FILE' > .env
             AGENT_NAME=production-agent
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
@@ -122,10 +124,10 @@ jobs:
             LOG_LEVEL=INFO
             PORT=8080
             HOST=0.0.0.0
-            EOF
+            ENV_FILE
 
             # 5. Deploy with dynamic image
             export IMAGE="$IMAGE_NAME"
             docker compose pull
-            docker compose up -d
+            docker compose up --no-build --wait --wait-timeout 180
             docker image prune -f

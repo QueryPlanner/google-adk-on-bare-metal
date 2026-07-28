@@ -43,32 +43,27 @@ This repository includes a GitHub Actions workflow that automatically:
 
 ### Using GHCR Images
 
-Instead of building locally, you can pull the pre-built image from GHCR.
+Instead of building locally, you can run the image published by your
+repository's successful Docker Publish workflow. Run these commands from the
+cloned repository after creating `.env`.
 
-1.  **Login to GHCR** (on your server):
-    ```bash
-    echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-    ```
-2.  **Pull the latest image**:
-    ```bash
-    docker pull ghcr.io/<your-org-or-username>/google-adk-on-bare-metal:main
-    ```
+Public GHCR packages can be pulled anonymously. For a private package, create a
+classic personal access token with only `read:packages`, load it into
+`GHCR_TOKEN` from your secret manager, and authenticate without placing the
+token in this repository or the command itself:
 
-### Automatic Deployment
-
-To automate deployment, update your `compose.yaml` to use the GHCR image:
-
-```yaml
-services:
-  agent:
-    image: ghcr.io/<your-org-or-username>/google-adk-on-bare-metal:main
-    # ... rest of config
+```bash
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 ```
 
-Then your update command becomes:
+Replace both placeholders below with the lowercase GitHub owner and repository
+whose workflow published the image. `IMAGE` selects the existing
+`${IMAGE:-agent}` Compose image contract; do not edit `compose.yaml`. The export
+is session-scoped, so repeat it in each new deployment shell.
+
 ```bash
-docker compose pull
-docker compose up --wait --wait-timeout 180
+export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>:main"
+docker compose pull && docker compose up --no-build --wait --wait-timeout 180
 ```
 
 ---
