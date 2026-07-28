@@ -29,7 +29,7 @@ jobs:
         shell: bash
         env:
           COMPOSE_DISABLE_ENV_FILE: "1"
-          IMAGE: google-adk-bare-metal:compose-${{ github.sha }}
+          IMAGE: ghcr.io/example/agent:compose-${{ github.sha }}
           SMOKE_PROJECT: adk-smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -Eeuo pipefail
@@ -107,6 +107,12 @@ jobs:
             -f compose.yaml
             -f "$OVERRIDE_FILE"
           )
+
+          resolved_images="$("${compose[@]}" config --images)"
+          if [ "$resolved_images" != "$IMAGE" ]; then
+            printf 'Unexpected Compose image: %s\n' "$resolved_images" >&2
+            exit 1
+          fi
 
           "${compose[@]}" config --quiet
           "${compose[@]}" build

@@ -78,6 +78,10 @@ set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 
 case " $* " in
+  *" config --images "*)
+    printf '%s\\n' "$IMAGE"
+    exit 0
+    ;;
   *" config --quiet "*|*" build "*)
     exit 0
     ;;
@@ -230,6 +234,7 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
         "trap 'exit 130' INT",
         "trap 'exit 143' TERM",
         "umask 077",
+        "IMAGE: ghcr.io/example/agent:compose-${{ github.sha }}",
         'mktemp "${RUNNER_TEMP}/compose-smoke-env.XXXXXX"',
         'mktemp "${RUNNER_TEMP}/compose-smoke-override.XXXXXX.yaml"',
         "export ENV_FILE",
@@ -238,6 +243,9 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
         '"127.0.0.1:8080:8080"',
         'restart: "no"',
         'OTEL_SDK_DISABLED: "true"',
+        '"${compose[@]}" config --images',
+        'if [ "$resolved_images" != "$IMAGE" ]; then',
+        "Unexpected Compose image:",
         '"${compose[@]}" config --quiet',
         '"${compose[@]}" build',
         "--detach --no-build --wait --wait-timeout 180",
@@ -261,6 +269,7 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
     ordered_fragments = (
         "trap cleanup EXIT",
         "umask 077",
+        '"${compose[@]}" config --images',
         '"${compose[@]}" config --quiet',
         '"${compose[@]}" build',
         '"${compose[@]}" up',
@@ -299,6 +308,7 @@ def test_smoke_script_success_probes_and_cleans_up(
     assert "Compose startup and health checks passed." in result.stdout
     calls = _docker_calls(smoke_harness)
     ordered_fragments = (
+        " config --images",
         " config --quiet",
         " build",
         " up --detach",

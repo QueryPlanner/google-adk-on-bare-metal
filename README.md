@@ -50,15 +50,19 @@ We've simplified deployment to the absolute basics. No Kubernetes required.
 
 ### Option 1: Using the Pre-built Image (Recommended)
 
-Since we include CI/CD, every push to `main` builds a fresh image. On your server:
+Every successful Docker Publish workflow on `main` publishes an image for that
+repository. From the cloned repository on your server, create `.env`, then
+replace both placeholders below with the lowercase owner and repository that
+published the image. The export is session-scoped, so repeat it in each new
+deployment shell.
 
 ```bash
-# 1. Pull the latest image
-docker pull ghcr.io/queryplanner/google-adk-on-bare-metal:main
-
-# 2. Start the service
-docker compose up --wait --wait-timeout 180
+export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>:main"
+docker compose pull && docker compose up --no-build --wait --wait-timeout 180
 ```
+
+Public GHCR packages can be pulled anonymously. Private packages require the
+least-privilege login described in the full deployment guide.
 
 ### Option 2: Build Yourself
 
