@@ -45,11 +45,27 @@ processors, and adds one outbound batch processor only when one complete remote
 trace mode is configured. The template does not replace or shut down that
 provider.
 
-Remote export supports OTLP traces over `http/protobuf`. It does not configure
-OTLP metrics or logs, HTTP server spans, log correlation, Cloud Trace, Cloud
-Logging, or a bundled collector. Structured message and tool payload fields are
-elided by default, but exception content, static descriptions, and operational
-metadata—including session or conversation identifiers—can still be exported.
+Remote export supports OTLP traces over `http/protobuf`. The base deployment
+does not configure OTLP metrics or logs, HTTP server spans, log correlation,
+Cloud Trace, Cloud Logging, or a Collector. Structured message and tool payload
+fields are elided by default, but exception content, static descriptions, and
+operational metadata—including session or conversation identifiers—can still
+be exported.
+
+An explicit `compose.trace-gateway.yaml` overlay can add one pinned Collector as
+an outbound VM privacy boundary. The agent sends HTTPS with bearer
+authentication over an internal Compose network; only the Collector joins a
+separate egress network and owns Langfuse credentials. Its fail-closed pipeline
+drops exception events and linked spans, canonicalizes structural names, clears
+status text and trace state, and keeps only reviewed integer token counts.
+Application readiness remains independent of Collector or vendor availability.
+
+The overlay adds another process, a 256 MiB memory limit, certificate/token
+rotation, and lossy in-memory queuing. It prevents selected fields from leaving
+the VM; it does not prevent raw telemetry from existing inside Python, ADK
+processors, or transient Collector receiver memory. The transport decision and
+rollback are recorded in
+[ADR 0001](adr/0001-private-tls-trace-gateway.md).
 
 Every remote request has a two-second effective timeout.
 `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` can supply a finite value greater than zero

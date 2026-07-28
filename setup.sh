@@ -142,14 +142,23 @@ fi
 
 # 7. Create Dedicated User (Optional but recommended)
 AGENT_USER="agent-runner"
+OTEL_GATEWAY_GROUP="otel-gateway"
+
+if ! getent group "$OTEL_GATEWAY_GROUP" &>/dev/null; then
+    log "Creating dedicated trace-gateway secret group: $OTEL_GATEWAY_GROUP"
+    groupadd --system "$OTEL_GATEWAY_GROUP"
+fi
+
 if ! id "$AGENT_USER" &>/dev/null; then
     log "Creating dedicated user: $AGENT_USER"
     useradd -m -s /bin/bash "$AGENT_USER"
-    usermod -aG docker "$AGENT_USER"
-    log "User $AGENT_USER created and added to docker group."
+    log "User $AGENT_USER created."
 else
     log "User $AGENT_USER already exists."
 fi
+
+usermod -aG "docker,$OTEL_GATEWAY_GROUP" "$AGENT_USER"
+log "User $AGENT_USER added to docker and $OTEL_GATEWAY_GROUP groups."
 
 log "Setup complete! Please log out and log back in (or switch to $AGENT_USER) to use Docker without sudo."
 log "To deploy your agent:"

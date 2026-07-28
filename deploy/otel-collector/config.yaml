@@ -1,0 +1,152 @@
+extensions:
+  bearertokenauth/gateway:
+    scheme: Bearer
+    filename: /run/secrets/otel_gateway_receiver_token
+  bearertokenauth/langfuse:
+    scheme: Basic
+    filename: /run/secrets/otel_gateway_langfuse_token
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth/gateway
+        tls:
+          cert_file: /run/secrets/otel_gateway_server_certificate
+          key_file: /run/secrets/otel_gateway_server_key
+          min_version: "1.2"
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 192
+    spike_limit_mib: 48
+
+  filter/privacy:
+    error_mode: propagate
+    traces:
+      span:
+        - Len(span.links) > 0
+      spanevent:
+        - "true"
+
+  transform/privacy:
+    error_mode: propagate
+    trace_statements:
+      - context: resource
+        statements:
+          - delete_matching_keys(resource.attributes, ".*")
+          - set(resource.attributes["service.name"], "google-adk-agent")
+          - set(resource.attributes["service.namespace"], "google-adk-on-bare-metal")
+      - context: scope
+        statements:
+          - delete_matching_keys(scope.attributes, ".*")
+          - set(scope.name, "google-adk")
+          - set(scope.version, "")
+          - set(scope.dropped_attributes_count, 0)
+      - context: span
+        statements:
+          - set(span.cache["original_name"], span.name)
+          - set(span.name, "agent.operation")
+          - set(span.name, "agent.request") where span.cache["original_name"] == "invocation"
+          - set(span.name, "agent.invoke") where IsMatch(span.cache["original_name"], "^invoke_agent(?:[ ].*)?$")
+          - set(span.name, "agent.llm") where span.cache["original_name"] == "call_llm"
+          - set(span.name, "agent.model") where IsMatch(span.cache["original_name"], "^generate_content(?:[ ].*)?$")
+          - set(span.name, "agent.tool") where IsMatch(span.cache["original_name"], "^execute_tool(?:[ ].*)?$")
+          - set(span.name, "agent.data") where span.cache["original_name"] == "send_data"
+          - set(span.name, "agent.compaction") where IsMatch(span.cache["original_name"], "^compact_events(?:[ ].*)?$")
+          - set(span.name, "agent.cache") where IsMatch(span.cache["original_name"], "^(?:handle_context_caching|create_cache)$")
+          - set(span.status.message, "")
+          - set(span.trace_state, "")
+          - set(span.flags, 0)
+          - set(span.dropped_attributes_count, 0)
+          - set(span.dropped_events_count, 0)
+          - set(span.dropped_links_count, 0)
+          - set(span.cache["input_tokens"], span.attributes["gen_ai.usage.input_tokens"]) where span.attributes["gen_ai.usage.input_tokens"] != nil and IsInt(span.attributes["gen_ai.usage.input_tokens"])
+          - set(span.cache["output_tokens"], span.attributes["gen_ai.usage.output_tokens"]) where span.attributes["gen_ai.usage.output_tokens"] != nil and IsInt(span.attributes["gen_ai.usage.output_tokens"])
+          - set(span.cache["reasoning_tokens"], span.attributes["gen_ai.usage.experimental.reasoning_tokens"]) where span.attributes["gen_ai.usage.experimental.reasoning_tokens"] != nil and IsInt(span.attributes["gen_ai.usage.experimental.reasoning_tokens"])
+          - set(span.cache["system_instruction_tokens"], span.attributes["gen_ai.usage.experimental.system_instruction_tokens"]) where span.attributes["gen_ai.usage.experimental.system_instruction_tokens"] != nil and IsInt(span.attributes["gen_ai.usage.experimental.system_instruction_tokens"])
+          - delete_matching_keys(span.attributes, ".*")
+          - set(span.attributes["gen_ai.usage.input_tokens"], span.cache["input_tokens"]) where span.cache["input_tokens"] != nil
+          - set(span.attributes["gen_ai.usage.output_tokens"], span.cache["output_tokens"]) where span.cache["output_tokens"] != nil
+          - set(span.attributes["gen_ai.usage.experimental.reasoning_tokens"], span.cache["reasoning_tokens"]) where span.cache["reasoning_tokens"] != nil
+          - set(span.attributes["gen_ai.usage.experimental.system_instruction_tokens"], span.cache["system_instruction_tokens"]) where span.cache["system_instruction_tokens"] != nil
+
+  redaction/privacy:
+    allow_all_keys: false
+    allowed_keys:
+      - service.name
+      - service.namespace
+      - gen_ai.usage.input_tokens
+      - gen_ai.usage.output_tokens
+      - gen_ai.usage.experimental.reasoning_tokens
+      - gen_ai.usage.experimental.system_instruction_tokens
+    summary: silent
+
+  # Rebuild resource and scope envelopes from the already-allowlisted fields.
+  # This removes proto fields that OTTL cannot address, including entity_refs,
+  # ResourceSpans/ScopeSpans schema_url, and the deprecated field-1000 scope
+  # envelope.
+  groupbyattrs/privacy: {}
+
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+exporters:
+  otlp_http/langfuse:
+    traces_endpoint: https://${env:OTEL_GATEWAY_LANGFUSE_AUTHORITY}/api/public/otel/v1/traces
+    headers:
+      x-langfuse-ingestion-version: "4"
+    auth:
+      authenticator: bearertokenauth/langfuse
+    tls:
+      insecure: false
+      min_version: "1.2"
+    timeout: 2s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 30s
+    sending_queue:
+      enabled: true
+      num_consumers: 1
+      queue_size: 256
+
+service:
+  extensions:
+    - bearertokenauth/gateway
+    - bearertokenauth/langfuse
+    - health_check
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+                without_type_suffix: true
+                without_units: true
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - filter/privacy
+        - transform/privacy
+        - redaction/privacy
+        - groupbyattrs/privacy
+        - batch
+      exporters:
+        - otlp_http/langfuse

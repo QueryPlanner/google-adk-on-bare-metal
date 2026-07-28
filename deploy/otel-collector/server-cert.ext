@@ -1,0 +1,3 @@
+subjectAltName=DNS:otel-collector
+extendedKeyUsage=serverAuth
+keyUsage=digitalSignature,keyEncipherment

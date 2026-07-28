@@ -187,13 +187,25 @@ The two-second per-request maximum is designed to fit the HTTP exporter's one
 inside the surrounding Compose grace period.
 
 The deployment contract is one server process using `python -m agent.server` or
-`uv run server`. This pull request does not support pre-fork workers, OTLP
+`uv run server`. The base deployment does not support pre-fork workers, OTLP
 metrics or logs, HTTP server tracing, Cloud Trace or Cloud Logging export, or a
-bundled collector.
+Collector.
 
-Only the documented trace endpoint, protocol, header, and timeout variables are
-accepted. Metric-specific, log-specific, and other
+Only the documented trace endpoint, protocol, header, certificate, and timeout
+variables are accepted. Metric-specific, log-specific, and other
 `OTEL_EXPORTER_OTLP_*` settings fail configuration validation.
+
+For a single-VM outbound privacy boundary, add
+`compose.trace-gateway.yaml` using the
+[gateway runbook](base-infra/observability.md#optional-vm-trace-redaction-gateway).
+This optional overlay requires Docker Compose 2.24.4 or newer and a dedicated
+host group for its bind-mounted secrets.
+That optional mode keeps Langfuse credentials in the Collector, uses
+private-network TLS plus bearer authentication, removes unapproved trace
+content before egress, and leaves application readiness independent of
+Collector health. It requires approximately 256 MiB of additional memory,
+certificate and token rotation, and a separate failure/upgrade lifecycle. It
+does not claim that raw trace content never enters the local telemetry pipeline.
 
 Existing VMs must remove the legacy generic
 `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, and

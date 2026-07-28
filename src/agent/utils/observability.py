@@ -12,7 +12,7 @@ import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI
 from opentelemetry import trace
@@ -28,6 +28,7 @@ from .config import ObservabilityEnv
 
 OTEL_FORCE_FLUSH_TIMEOUT_MILLIS = 5_000
 _OTLP_TRACE_ENVIRONMENT_KEYS = (
+    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
@@ -35,6 +36,19 @@ _OTLP_TRACE_ENVIRONMENT_KEYS = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _append_no_proxy_host(hostname: str) -> None:
+    """Route the authenticated VM gateway directly while preserving exclusions."""
+    for environment_key in ("NO_PROXY", "no_proxy"):
+        entries = [
+            entry.strip()
+            for entry in os.environ.get(environment_key, "").split(",")
+            if entry.strip()
+        ]
+        if not any(entry.casefold() == hostname.casefold() for entry in entries):
+            entries.append(hostname)
+        os.environ[environment_key] = ",".join(entries)
 
 
 def configure_otel_resource(
@@ -84,6 +98,18 @@ def configure_otel_resource(
             os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
                 explicit_headers.get_secret_value()
             )
+        else:
+            gateway_token = settings.gateway_bearer_token
+            if gateway_token is not None:
+                encoded_token = quote(gateway_token.get_secret_value(), safe="")
+                os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+                    f"authorization=Bearer%20{encoded_token}"
+                )
+                gateway_hostname = cast(str, urlparse(explicit_endpoint).hostname)
+                _append_no_proxy_host(gateway_hostname)
+        explicit_certificate = settings.otel_exporter_otlp_traces_certificate
+        if explicit_certificate is not None:
+            os.environ["OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"] = explicit_certificate
         return
 
     public_key = settings.langfuse_public_key

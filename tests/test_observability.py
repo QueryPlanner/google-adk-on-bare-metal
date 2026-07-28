@@ -37,6 +37,7 @@ _OBSERVABILITY_ENVIRONMENT_KEYS = (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_HEADERS",
     "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
@@ -44,6 +45,8 @@ _OBSERVABILITY_ENVIRONMENT_KEYS = (
     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
     "OTEL_RESOURCE_ATTRIBUTES",
     "OTEL_SERVICE_NAME",
+    "NO_PROXY",
+    "no_proxy",
 )
 
 
@@ -71,9 +74,12 @@ def isolate_observability_state(
 
 def test_explicit_trace_settings_are_materialized_without_generic_export(
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     """Publish only validated HTTP trace settings and both capture controls."""
     header = "Authorization=Bearer%20header-secret-canary"
+    certificate = tmp_path / "collector-ca.pem"
+    certificate.write_text("synthetic-ca\n", encoding="utf-8")
     settings = ObservabilityEnv.model_validate(
         {
             "TELEMETRY_NAMESPACE": "test-namespace",
@@ -82,6 +88,7 @@ def test_explicit_trace_settings_are_materialized_without_generic_export(
                 "https://collector.example.test/otel/v1/traces"
             ),
             "OTEL_EXPORTER_OTLP_TRACES_HEADERS": header,
+            "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
         }
     )
@@ -99,6 +106,7 @@ def test_explicit_trace_settings_are_materialized_without_generic_export(
     )
     assert os.environ["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] == "http/protobuf"
     assert os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] == header
+    assert os.environ["OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"] == str(certificate)
     assert os.environ["OTEL_EXPORTER_OTLP_TRACES_TIMEOUT"] == "2.0"
     assert os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] == "true"
     assert os.environ["ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"] == "true"
@@ -119,6 +127,7 @@ def test_disabled_export_clears_stale_trace_settings_and_capture(
         "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
         "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
         "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
     ):
         monkeypatch.setenv(key, "stale-secret-canary")
@@ -129,6 +138,7 @@ def test_disabled_export_clears_stale_trace_settings_and_capture(
     assert "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" not in os.environ
     assert "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL" not in os.environ
     assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
+    assert "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE" not in os.environ
     assert "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT" not in os.environ
     assert os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] == "false"
     assert os.environ["ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"] == "false"
@@ -179,6 +189,40 @@ def test_explicit_endpoint_without_headers_stays_header_free() -> None:
 
     assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     assert os.environ["OTEL_EXPORTER_OTLP_TRACES_TIMEOUT"] == "2.0"
+
+
+def test_gateway_token_file_materializes_one_bearer_header(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use one mounted local secret without exposing it in logs or settings."""
+    token = "gateway-token-secret-canary"  # noqa: S105
+    certificate = tmp_path / "collector-ca.pem"
+    certificate.write_text("synthetic-ca\n", encoding="utf-8")
+    token_file = tmp_path / "gateway-token"
+    token_file.write_text(f"{token}\n", encoding="ascii")
+    settings = ObservabilityEnv.model_validate(
+        {
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                "https://otel-collector:4318/v1/traces"
+            ),
+            "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
+            "OTEL_GATEWAY_BEARER_TOKEN_FILE": str(token_file),
+        }
+    )
+    monkeypatch.setenv("NO_PROXY", "localhost,internal.example")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,OTEL-COLLECTOR")
+
+    configure_otel_resource("test-agent", settings)
+
+    parsed_headers = parse_env_headers(os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"])
+    assert parsed_headers == {"authorization": f"Bearer {token}"}
+    assert os.environ["OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"] == str(certificate)
+    assert os.environ["NO_PROXY"] == "localhost,internal.example,otel-collector"
+    assert os.environ["no_proxy"] == "127.0.0.1,OTEL-COLLECTOR"
+    assert token not in capsys.readouterr().out
+    assert token not in repr(settings)
 
 
 @pytest.mark.parametrize(

@@ -243,17 +243,18 @@ def test_workflow_has_unprivileged_complete_ci_triggers() -> None:
 def test_workflow_checkout_is_immutable_and_drops_credentials() -> None:
     """Keep PR-controlled Docker builds away from persistent Git credentials."""
     document = WORKFLOW_PATH.read_text(encoding="utf-8")
-    checkout_step = _workflow_step_block(document, "Checkout repository")
     checkout_uses = list(CHECKOUT_USES_PATTERN.finditer(document))
 
-    assert len(checkout_uses) == 1
-    checkout_use = checkout_uses[0]
-    checkout_reference = checkout_use.group("reference")
-    assert checkout_use.group(0).strip() in checkout_step
-    assert re.fullmatch(r"[0-9a-f]{40}", checkout_reference)
-    assert checkout_reference != "0" * 40
-    assert checkout_use.group("annotation") is not None
-    assert "persist-credentials: false" in checkout_step
+    assert len(checkout_uses) == 2
+    for checkout_use in checkout_uses:
+        checkout_reference = checkout_use.group("reference")
+        assert re.fullmatch(r"[0-9a-f]{40}", checkout_reference)
+        assert checkout_reference != "0" * 40
+        assert checkout_use.group("annotation") is not None
+    assert {match.group("reference") for match in checkout_uses} == {
+        "3d3c42e5aac5ba805825da76410c181273ba90b1"
+    }
+    assert document.count("persist-credentials: false") == 2
     assert "secrets." not in document
     assert "packages: write" not in document
     assert "docker/login-action" not in document

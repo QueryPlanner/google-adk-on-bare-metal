@@ -25,11 +25,14 @@ It does not configure:
 - gRPC export;
 - FastAPI or other HTTP server spans;
 - log correlation, JSON file logs, Cloud Trace, or Cloud Logging;
-- a bundled OpenTelemetry Collector; or
+- an OpenTelemetry Collector in the base Compose deployment; or
 - multi-worker or pre-fork provider coordination.
 
 Application logs continue to go to standard output. Use Docker or systemd log
 collection and retention independently from trace export.
+
+Operators can explicitly add the optional private-TLS redaction gateway
+documented below. It is not enabled by the base Compose file.
 
 ## Provider and process lifecycle
 
@@ -159,6 +162,8 @@ case-insensitively and normalized to that value. Headers are optional:
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com/v1/traces
 OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 OTEL_EXPORTER_OTLP_TRACES_HEADERS=authorization=Bearer%20replace-me
+# Optional private CA:
+OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE=/absolute/path/to/collector-ca.pem
 ```
 
 Trace-specific endpoint semantics differ from generic OTLP base-endpoint
@@ -205,7 +210,8 @@ The adapter rejects:
 - headers without valid `name=value` fields; and
 - control characters, including CRLF.
 
-The four documented trace endpoint, protocol, header, and timeout variables are
+The five documented trace endpoint, protocol, header, certificate, and timeout
+variables are
 the only accepted `OTEL_EXPORTER_OTLP_*` settings. Metric-specific,
 log-specific, and other exporter variables are rejected before ADK can
 interpret them. The supported settings sources are explicit constructor values,
@@ -215,6 +221,279 @@ they cannot bypass that allowlist.
 
 Endpoint and header failures use stable, secret-free messages. They must not be
 diagnosed by printing the rejected values.
+
+## Optional VM trace-redaction gateway
+
+Use `compose.trace-gateway.yaml` only when traces must cross an outbound privacy
+boundary before leaving a single Linux VM. The base direct-export mode remains
+the smaller operational choice. The overlay requires Docker Compose 2.24.4 or
+newer because it uses the `!override` merge tag.
+
+The overlay adds a pinned Collector with:
+
+- one private internal telemetry network shared with the agent;
+- a separate Collector-only egress network;
+- TLS 1.2 or newer and bearer authentication on the local OTLP receiver;
+- Langfuse Basic authentication loaded only by the Collector;
+- no OTLP receiver port published to the host;
+- process health on `127.0.0.1:13133` and payload-free internal metrics on
+  `127.0.0.1:8888`;
+- a 0.5 CPU, 256 MiB, and 100-PID limit; and
+- a bounded in-memory queue with no raw-telemetry WAL.
+
+The application receives only the local Collector endpoint, CA, and receiver
+token file. The overlay replaces the base agent env file and explicitly clears
+all `LANGFUSE_*` settings and operator-provided trace headers, even if those
+values are present in that replacement file. Langfuse endpoint and credential
+material exist only in the Collector. The application reads the local receiver
+token from its mounted file and materializes the derived authorization header
+inside its own process because ADK consumes exporter settings through the
+OpenTelemetry environment contract; Docker Compose configuration and container
+metadata do not contain that token.
+The overlay also clears both Python OTLP HTTP credential-provider hooks. The
+application rejects nonblank hook values from every settings source and appends
+`otel-collector` to both `NO_PROXY` variants while preserving existing entries,
+so the authenticated VM hop uses direct Docker DNS.
+
+### What the gateway removes
+
+The fail-closed pipeline drops every span containing a link and every span
+event, including exception events. It replaces resource identity with fixed safe
+values, normalizes instrumentation scope and known ADK operation names, maps
+unknown span names to `agent.operation`, clears `status.message` and trace
+state, and removes every span attribute except these integer fields:
+
+- `gen_ai.usage.input_tokens`;
+- `gen_ai.usage.output_tokens`;
+- `gen_ai.usage.experimental.reasoning_tokens`; and
+- `gen_ai.usage.experimental.system_instruction_tokens`.
+
+A second redaction allowlist runs before batching. Non-integer values under an
+allowed token key are deleted. The four allowed attributes are reconstructed
+under fresh literal keys so hidden protobuf key metadata cannot survive. Span
+flags and every dropped-item counter are reset to zero. Trace/span identifiers
+and parentage, span kind, timestamps, duration, status code, and the four safe
+token counts remain.
+
+The pinned transform processor cannot address every field in newer OTLP
+resource envelopes. A final empty-key `groupbyattrs` pass therefore reconstructs
+resources and scopes from the already allowlisted fields; this removes
+`Resource.entity_refs`, `ResourceSpans.schema_url`, and
+`ScopeSpans.schema_url`, plus the deprecated field-1000 scope envelope, before
+batching. The policy is deliberately lossy, and new ADK attributes remain
+dropped until reviewed. Never enable Collector transform debug logging because
+it can print the raw transform context.
+
+This is a minimization boundary for non-adversarial standard SDK
+instrumentation, not data-loss prevention against compromised application code.
+Retained IDs, timestamps, integer counts, kind, and status code can be
+used as covert channels by code deliberately constructing hostile OTLP.
+
+### Prepare gateway files
+
+Create the operator-owned files without copying any repository `.env` that
+contains Langfuse credentials. The root-owned `setup.sh` creates the
+`otel-gateway` group and adds `agent-runner`. On a VM prepared another way, an
+administrator must first run `groupadd --system otel-gateway` and add the
+deployment account to that group; the fallback below assumes the default
+`agent-runner` account. Log in again before continuing. The remaining commands
+run as the unprivileged deployment account:
+
+```bash
+# Administrator-only fallback when setup.sh was not used:
+getent group otel-gateway >/dev/null \
+  || sudo groupadd --system otel-gateway
+sudo usermod -aG otel-gateway agent-runner
+```
+
+```bash
+compose_version="$(docker compose version --short)"
+python3 -c '
+import re
+import sys
+
+match = re.fullmatch(r"v?([0-9]+)[.]([0-9]+)[.]([0-9]+)(?:[-+].*)?", sys.argv[1])
+if match is None or tuple(map(int, match.groups())) < (2, 24, 4):
+    raise SystemExit("Docker Compose 2.24.4 or newer is required")
+' "$compose_version"
+unset compose_version
+
+umask 077
+getent group otel-gateway >/dev/null
+id -nG | tr ' ' '\n' | grep -qx otel-gateway
+mkdir -p secrets/otel-gateway
+cp deploy/otel-collector/agent.env.example .env.trace-agent
+cp deploy/otel-collector/collector.env.example .env.trace-collector
+cp deploy/otel-collector/compose.env.example .env.trace-gateway
+chmod 600 .env.trace-agent .env.trace-collector .env.trace-gateway
+
+gateway_secret_gid="$(getent group otel-gateway | cut -d: -f3)"
+test -n "$gateway_secret_gid"
+sed -i \
+  "s/^OTEL_GATEWAY_SECRET_GID=.*/OTEL_GATEWAY_SECRET_GID=$gateway_secret_gid/" \
+  .env.trace-gateway
+unset gateway_secret_gid
+```
+
+Set the application and model values in `.env.trace-agent`. Set the non-secret
+`AGENT_NAME` and host file paths in `.env.trace-gateway`. In
+`.env.trace-collector`, set `OTEL_GATEWAY_LANGFUSE_AUTHORITY` to only the
+Langfuse hostname and optional port, with no scheme or path. The Collector
+configuration supplies the immutable `https://` scheme and exact
+`/api/public/otel/v1/traces` path, so a plaintext exporter URL cannot be
+configured. Do not add `LANGFUSE_*`, a vendor endpoint, or a vendor header to
+the agent file.
+
+The dedicated numeric group is added to both non-root containers. Runtime
+secret files are group-readable, but Compose mounts only the CA and receiver
+token into the agent; the server key and Langfuse token remain Collector-only.
+This avoids running either service as root and avoids relying on unsupported
+UID/GID remapping for bind-mounted local Compose secrets.
+
+Create a VM-local CA and a receiver certificate whose SAN matches the Compose
+service name:
+
+```bash
+openssl genpkey -algorithm RSA \
+  -pkeyopt rsa_keygen_bits:3072 \
+  -out secrets/otel-gateway/ca.key
+openssl req -x509 -new -sha256 -days 365 \
+  -key secrets/otel-gateway/ca.key \
+  -subj "/CN=ADK trace gateway CA" \
+  -out secrets/otel-gateway/ca.pem
+openssl genpkey -algorithm RSA \
+  -pkeyopt rsa_keygen_bits:3072 \
+  -out secrets/otel-gateway/server.key
+openssl req -new -sha256 \
+  -key secrets/otel-gateway/server.key \
+  -subj "/CN=otel-collector" \
+  -out secrets/otel-gateway/server.csr
+openssl x509 -req -sha256 -days 90 \
+  -in secrets/otel-gateway/server.csr \
+  -CA secrets/otel-gateway/ca.pem \
+  -CAkey secrets/otel-gateway/ca.key \
+  -CAcreateserial \
+  -extfile deploy/otel-collector/server-cert.ext \
+  -out secrets/otel-gateway/server.pem
+openssl rand -hex 32 > secrets/otel-gateway/receiver.token
+chmod 600 \
+  secrets/otel-gateway/ca.key \
+  secrets/otel-gateway/server.csr \
+  secrets/otel-gateway/ca.srl
+chgrp otel-gateway \
+  secrets/otel-gateway/ca.pem \
+  secrets/otel-gateway/server.pem \
+  secrets/otel-gateway/server.key \
+  secrets/otel-gateway/receiver.token
+chmod 640 \
+  secrets/otel-gateway/ca.pem \
+  secrets/otel-gateway/server.pem \
+  secrets/otel-gateway/server.key \
+  secrets/otel-gateway/receiver.token
+```
+
+The Collector's Langfuse auth extension expects the base64 payload after the
+`Basic` scheme, not the scheme itself. Generate it from operator-controlled
+environment variables without printing either key:
+
+```bash
+test -n "${LANGFUSE_PUBLIC_KEY:-}"
+test -n "${LANGFUSE_SECRET_KEY:-}"
+printf '%s:%s' "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" \
+  | openssl base64 -A \
+  > secrets/otel-gateway/langfuse-basic.token
+chgrp otel-gateway secrets/otel-gateway/langfuse-basic.token
+chmod 640 secrets/otel-gateway/langfuse-basic.token
+unset LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY
+```
+
+The receiver loader accepts the single terminal newline written by
+`openssl rand` and rejects embedded whitespace or additional lines. Do not
+commit these env, token, certificate, or private-key files. The repository
+ignores `secrets/otel-gateway/` as an additional staging safeguard.
+
+### Validate and start
+
+Resolve the exact two-file deployment and validate the configuration with the
+pinned binary before starting:
+
+```bash
+COMPOSE_DISABLE_ENV_FILE=1 docker compose \
+  --env-file .env.trace-gateway \
+  -f compose.yaml \
+  -f compose.trace-gateway.yaml \
+  config --quiet
+
+COMPOSE_DISABLE_ENV_FILE=1 docker compose \
+  --env-file .env.trace-gateway \
+  -f compose.yaml \
+  -f compose.trace-gateway.yaml \
+  run --rm --no-deps otel-collector \
+  validate --config=file:/etc/otelcol-contrib/config.yaml
+
+COMPOSE_DISABLE_ENV_FILE=1 docker compose \
+  --env-file .env.trace-gateway \
+  -f compose.yaml \
+  -f compose.trace-gateway.yaml \
+  up --build --wait --wait-timeout 180
+```
+
+The application does not depend on Collector health. `--wait` proves the
+application readiness contract only. Check the Collector separately:
+
+```bash
+curl --fail --silent http://127.0.0.1:13133/
+curl --fail --silent http://127.0.0.1:8888/metrics \
+  | grep -E 'otelcol_(processor|exporter|receiver)'
+```
+
+Internal metrics carry component names and counts, not trace payloads. Use them
+to inspect receive/export failures, queue pressure, and filter drops. To verify
+the transformation policy itself, run the repository's isolated synthetic
+canary; it creates temporary credentials, publishes no host ports, and does not
+read the deployment `.env`:
+
+```bash
+RUN_TRACE_GATEWAY_INTEGRATION=1 \
+  uv run pytest tests/test_trace_gateway_runtime.py -q
+```
+
+Never enable detailed transform logs against real traffic.
+
+### Failure, rotation, and rollback
+
+If the Collector or Langfuse is unavailable, trace export can retry briefly,
+fill the bounded queue, and drop data. `/live`, ADK's `/health`, and
+database-independent `/ready` remain healthy. The Collector health extension
+reports process health only and does not claim downstream delivery.
+
+Upgrade the Collector in its own pull request. Review the pinned release's
+processor and security changes, update the tag and digest together, and require
+the manifest index to resolve both `linux/amd64` and `linux/arm64`. The built-in
+configuration validation and hosted TLS/redaction canary must pass before
+merge, followed by the same synthetic canary on the target VM architecture
+during rollout. Dependabot watches the Compose manifest, but its proposed digest
+is not sufficient evidence by itself. After merge, pull and recreate only
+`otel-collector`, then check loopback health and queue/export metrics before
+treating the upgrade as complete. Roll back by restoring the preceding reviewed
+tag/digest and recreating that service; do not substitute a moving tag.
+
+Rotate the receiver token, server certificate, and Langfuse token by replacing
+the files atomically and recreating both services. Keep the old CA during a
+staged certificate rotation so the application trusts the replacement before
+the Collector switches certificates.
+
+Rollback to direct mode by stopping the overlay project, choosing one documented
+direct export mode in the base `.env`, and starting only `compose.yaml`. Do not
+copy Collector-only credentials into the agent env file as part of rollback.
+
+This gateway guarantees only that the removed fields do not appear in the
+outbound payload verified after the Collector. Raw values can still exist in
+Python, ADK processors, the local HTTPS request, and transient Collector
+receiver memory. It does not protect against application code intentionally
+encoding data into retained structural or integer fields. See
+[ADR 0001](../adr/0001-private-tls-trace-gateway.md) for the transport decision
+and tradeoffs.
 
 ## Failure behavior
 
