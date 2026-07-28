@@ -25,10 +25,21 @@ from .utils import (
     ServerEnv,
     configure_otel_resource,
     initialize_environment,
+    install_otel_flush_lifespan,
     setup_logging,
 )
 
 logger = logging.getLogger("agent.server")
+
+
+def _configure_content_instrumentation(capture_content: bool) -> None:
+    """Reconcile the process-global OpenInference instrumentor with settings."""
+    instrumentor = GoogleADKInstrumentor()
+    is_instrumented = instrumentor.is_instrumented_by_opentelemetry
+    if capture_content and not is_instrumented:
+        instrumentor.instrument()
+    elif not capture_content and is_instrumented:
+        instrumentor.uninstrument()
 
 
 def create_app(env: ServerEnv | None = None) -> FastAPI:
@@ -40,7 +51,7 @@ def create_app(env: ServerEnv | None = None) -> FastAPI:
         agent_name=server_env.agent_name,
         settings=observability_env,
     )
-    GoogleADKInstrumentor().instrument()
+    _configure_content_instrumentation(observability_env.otel_capture_message_content)
     setup_logging(log_level=server_env.log_level)
 
     configured_agent_dir = (
@@ -82,6 +93,7 @@ def create_app(env: ServerEnv | None = None) -> FastAPI:
 
     app.get("/live")(live)
     app.get("/ready")(ready)
+    install_otel_flush_lifespan(app)
     return app
 
 

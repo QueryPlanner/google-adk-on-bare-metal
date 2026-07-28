@@ -33,7 +33,7 @@ EXPECTED_IGNORES = {
             "update-types": ["version-update:semver-minor"],
         },
         {
-            "dependency-name": "opentelemetry-exporter-otlp-proto-grpc",
+            "dependency-name": "opentelemetry-exporter-otlp-proto-http",
             "update-types": ["version-update:semver-minor"],
         },
         {

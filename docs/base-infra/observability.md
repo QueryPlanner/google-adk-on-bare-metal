@@ -1,150 +1,284 @@
-# Agent Observability with OpenTelemetry
+# Trace Observability with OpenTelemetry
 
-This project includes production-ready OpenTelemetry observability that provides consistent behavior across local development and deployed environments. The implementation automatically instruments LLM calls and application logs with minimal configuration while coexisting with ADK's internal telemetry infrastructure.
+This template uses Google ADK's process-wide OpenTelemetry provider for agent
+traces. ADK remains the sole owner of that provider and its internal processors;
+the template does not install, replace, or shut down a second provider.
 
-## What's Instrumented
+Remote export is optional. When configured, the pinned runtime adds one
+trace-only `BatchSpanProcessor` and sends OTLP over `http/protobuf`. Without a
+remote mode, ADK keeps its internal tracing behavior and no trace leaves the
+process through this adapter.
 
-- **LLM Operations**: Google Generative AI SDK calls with request/response details
-- **Structured Logging**: JSON logs with automatic trace correlation for Google Cloud Logging
-- **Agent Callbacks**: Lifecycle logging for agent start/end, model calls, and tool invocations
+## Supported boundary
 
-## Key Features
+The template supports:
 
-- **Consistent Setup**: Single `setup_opentelemetry()` function used across all environments (local and deployed)
-- **Instance-Level Tracking**: Unique `SERVICE_INSTANCE_ID` per process (PID + UUID) for collision-free identification
-- **Environment Grouping**: `SERVICE_NAMESPACE` automatically set to Terraform workspace in deployed environments (`default`, `dev`, `stage`, `prod`)
-- **Version Tracking**: `SERVICE_VERSION` set to Cloud Run revision ID for deployment correlation
-- **Google Cloud Integration**: Direct export to Google Cloud Trace (OTLP) and Cloud Logging
-- **Trace Correlation**: Logs automatically include trace context via `LoggingInstrumentor`
-- **Service Identification**: OpenTelemetry `service.name` set to `AGENT_NAME` environment variable
-- **Authentication**: Uses Application Default Credentials (ADC) for Google Cloud APIs
+- Google ADK spans, plus OpenInference spans only with the content-capture
+  opt-in;
+- resource identity for one server process;
+- optional trace export to Langfuse or another OTLP/HTTP collector; and
+- a bounded, best-effort graceful flush.
 
-## Configuration
+It does not configure:
 
-**Required environment variables:**
-- `AGENT_NAME`: OpenTelemetry service identifier (required)
-- `GOOGLE_CLOUD_PROJECT`: GCP project ID for trace and log export (required)
-- `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`: Capture LLM message content - `TRUE` or `FALSE` (required)
+- OTLP metrics or logs;
+- gRPC export;
+- FastAPI or other HTTP server spans;
+- log correlation, JSON file logs, Cloud Trace, or Cloud Logging;
+- a bundled OpenTelemetry Collector; or
+- multi-worker or pre-fork provider coordination.
 
-**Optional variables:**
-- `GOOGLE_CLOUD_LOCATION`: Vertex AI region (default: `us-central1`)
-- `LOG_LEVEL`: Logging verbosity - `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (default: `INFO`)
-- `TELEMETRY_NAMESPACE`: Service namespace for trace grouping (default: `local`, auto-set to workspace in deployed environments)
+Application logs continue to go to standard output. Use Docker or systemd log
+collection and retention independently from trace export.
 
-See `.env.example` for complete configuration reference.
+## Provider and process lifecycle
 
-## Usage
+The server validates observability settings and publishes only validated
+OpenTelemetry resource, content-control, and trace-specific exporter variables
+before calling ADK's FastAPI factory. ADK then creates the global
+`TracerProvider`, retains its internal processors, and adds one outbound batch
+processor when remote export is enabled.
 
-Identical OpenTelemetry setup across local development and deployed environments:
-- Traces and logs automatically exported to Google Cloud
-- ADK web UI available locally (when `SERVE_WEB_INTERFACE=TRUE`)
-- **Production tip**: Set `LOG_LEVEL=INFO` to minimize logging costs
-
-## Viewing Traces and Logs
-
-### Google Cloud Console (Recommended)
-
-**[Cloud Trace](https://console.cloud.google.com/traces):** Filter by `AGENT_NAME`, view spans, timing, and generative AI events
-
-**[Logs Explorer](https://console.cloud.google.com/logs):** Query `logName="projects/{PROJECT_ID}/logs/{AGENT_NAME}-otel-logs"` for correlated logs
-
-### gcloud CLI
+The supported deployment is one process started with:
 
 ```bash
-# Tail logs in real-time
-gcloud logging tail "resource.type=cloud_run_revision" --format=json
-
-# Filter by log name
-gcloud logging tail "logName:projects/{PROJECT_ID}/logs/{AGENT_NAME}-otel-logs"
-
-# View recent traces
-gcloud trace list --limit=10
+uv run python -m agent.server
+# or
+uv run server
 ```
 
-### VS Code GCP Extension
+Compose uses that same single-process contract. Gunicorn, multiple Uvicorn
+workers, and other pre-fork modes are outside the tested boundary because every
+process would own a separate global provider and export queue.
 
-Install the [Google Cloud Code extension](https://cloud.google.com/code/docs/vscode/install) to view logs and traces directly in your IDE.
+During graceful application shutdown, ADK closes its runners first. The outer
+application lifespan then gives the provider up to five seconds to flush queued
+spans. The template never calls `provider.shutdown()`; the OpenTelemetry SDK's
+`atexit` hook owns final shutdown only on normal interpreter exit. Uvicorn's
+signal-termination path instead relies on the explicit outer flush. This is
+still best effort: an unreachable collector can cause exporter errors or
+dropped spans. `SIGKILL`, a host crash, or a deadline shorter than the flush
+budget cannot flush queued telemetry. Compose allows a ten-second stop grace
+period around the application shutdown path.
 
-## Implementation Details
+## Trace-content contract
 
-**Functions:** `configure_otel_resource()` sets resource attributes, `setup_opentelemetry()` configures exporters
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false` is the default. The
+adapter applies that choice to ADK's current and legacy content controls and
+does not enable the OpenInference ADK instrumentor. ADK's structured prompt and
+response fields plus tool argument and result attributes are therefore elided
+by default. Repeated in-process app factories reconcile the process-global
+instrumentor, so a previous opt-in cannot survive a later disabled factory.
 
-**Components:** `GoogleGenAiSdkInstrumentor` (LLM ops), `LoggingInstrumentor` (trace context), `CloudLoggingExporter` (logs), `OTLPSpanExporter` (traces)
+Setting the flag to `true` enables both ADK content controls and OpenInference
+instrumentation. It changes the emitted span shape and is an explicit
+privacy-sensitive opt-in:
 
-### Resource Attributes
-
-OpenTelemetry resource attributes uniquely identify your service instances in traces and logs:
-
-| Attribute | Source | Example | Description |
-|-----------|--------|---------|-------------|
-| `service.name` | `AGENT_NAME` env var | `your-agent-name` | Service identifier (set explicitly in `.env`) |
-| `service.namespace` | `TELEMETRY_NAMESPACE` env var | `default`/`dev`/`stage`/`prod` (deployed) or `local` (dev) | Environment (via Terraform workspace) grouping for traces |
-| `service.version` | `K_REVISION` env var | `your-agent-name-00042-abc` (deployed) or `local` (dev) | Cloud Run revision or local dev indicator |
-| `service.instance.id` | Generated | `worker-1234-a1b2c3d4e5f6` | Unique process instance (PID + UUID) |
-| `gcp.project_id` | `GOOGLE_CLOUD_PROJECT` env var | `my-project-id` | GCP project for resource correlation |
-
-**Local Development:**
-- `service.namespace`: Defaults to `"local"` (customize via `TELEMETRY_NAMESPACE` for multi-developer disambiguation)
-- `service.version`: Set to `"local"`
-- `service.instance.id`: Unique per server restart (includes UUID to prevent collisions)
-
-**Deployed Environments:**
-- `service.namespace`: Automatically set to Terraform workspace name (`default`, `dev`, `stage`, `prod`)
-- `service.version`: Automatically set to Cloud Run revision ID
-- `service.instance.id`: Unique per container instance
-
-## Callback Logging
-
-`LoggingCallbacks` (in `callbacks.py`) logs agent lifecycle events (start/end, model calls, tool invocations) with automatic trace context correlation.
-
-## Vendor Neutrality & Langfuse Integration
-
-This project uses **OpenTelemetry (OTel)** as the standard protocol for observability. This ensures you are **not locked into any specific vendor**. You can send traces to any backend that supports OTLP (e.g., Jaeger, Honeycomb, Datadog, Langfuse).
-
-### Langfuse (Auto-Configuration)
-
-For convenience, we provide built-in auto-configuration for [Langfuse](https://langfuse.com). If you provide Langfuse credentials, the system will automatically configure the OTLP exporter for you.
-
-**Setup:**
-1. Add `langfuse` and `openinference-instrumentation-google-adk` to your dependencies.
-2. Set the following environment variables:
-   ```bash
-   LANGFUSE_PUBLIC_KEY="pk-lf-..."
-   LANGFUSE_SECRET_KEY="sk-lf-..."
-   LANGFUSE_BASE_URL="https://cloud.langfuse.com" # or https://us.cloud.langfuse.com
-   ```
-   *The system will automatically generate the required OTLP headers and endpoint.*
-
-### Other Vendors (Jaeger, Honeycomb, etc.)
-
-To use a different vendor, simply **do not** set the `LANGFUSE_` variables. Instead, set the standard OpenTelemetry environment variables for your provider.
-
-**Example: Jaeger (Local)**
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318/v1/traces"
-OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+```dotenv
+OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
 ```
 
-**Example: Honeycomb**
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT="https://api.honeycomb.io"
-OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=YOUR_API_KEY"
+This flag is not an arbitrary redaction layer. OpenTelemetry records unhandled
+exceptions as span events and error status by default. Exception messages,
+stack traces, and status descriptions can therefore contain runtime content
+even while structured message and tool payload fields are elided. Static agent
+and tool descriptions also remain operational metadata.
+
+Depending on the executed ADK path, content-disabled traces can still include:
+
+- `service.name`, namespace, version, and process instance identity;
+- span names, timestamps, durations, status, exception details, and errors;
+- model, agent, and tool names or descriptions, invocation settings, and token
+  counts; and
+- user, session, invocation, or conversation identifiers.
+
+Treat the collector and its access controls, retention, backups, and downstream
+integrations as systems that hold sensitive operational metadata. Do not put API
+keys, passwords, personal data, or other secrets into service names, identifiers,
+descriptions, exception messages, resource attributes, or custom span
+attributes. Sanitize exceptions before they cross an instrumented boundary.
+
+Trace capture controls do not govern application logs. In particular, `DEBUG`
+logging can include request, response, or tool data from application callbacks.
+Apply separate log-level, collection, access, and retention controls.
+
+## Choose one remote mode
+
+Remote export has three valid states:
+
+1. no remote mode;
+2. one complete Langfuse mode; or
+3. one complete explicit trace OTLP mode.
+
+Langfuse credentials or base URL and an explicit trace endpoint, protocol, or
+headers are mutually exclusive. Partial Langfuse credentials, settings from both
+modes, unsupported protocols, and unsafe endpoints or headers fail before the
+server binds. The shared trace timeout can accompany either complete mode.
+Validation errors are generic and do not echo endpoint, credential, or header
+values.
+
+### Mode 1: Langfuse
+
+Set both keys. `LANGFUSE_BASE_URL` is optional and defaults to the EU cloud
+host:
+
+```dotenv
+LANGFUSE_PUBLIC_KEY=pk-lf-replace-me
+LANGFUSE_SECRET_KEY=sk-lf-replace-me
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
-## Message Content Capture
+The adapter derives:
 
-`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` controls LLM content capture:
-- `TRUE`: Full content (debugging, higher costs, sensitive data)
-- `FALSE`: Metadata only (production, lower costs, privacy)
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` as
+  `<base>/api/public/otel/v1/traces`;
+- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`; and
+- trace headers logically equivalent to:
 
-> [!IMPORTANT]
-> Must be explicitly set to `TRUE` for ADK to capture conversation content
+  ```text
+  Authorization: Basic <base64(public-key:secret-key)>
+  x-langfuse-ingestion-version: 4
+  ```
 
-## Resources
+The OpenTelemetry environment serialization percent-encodes the authorization
+value; for example, the space after `Basic` becomes `%20`. The v4 ingestion
+header makes directly ingested spans available through Langfuse's current
+ingestion path. Derived credentials are never printed.
 
-- [Vertex AI | Agent Engine | Trace an Agent](https://cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/manage/tracing)
-- [Google Cloud Observability | Instrument ADK Applications with OpenTelemetry](https://cloud.google.com/stackdriver/docs/instrumentation/ai-agent-adk)
-- [Google Cloud Trace | View Generative AI Events](https://cloud.google.com/trace/docs/finding-traces#view_generative_ai_events)
-- [OpenTelemetry | Generative AI Instrumentation](https://opentelemetry.io/blog/2024/otel-generative-ai/)
-- [OpenTelemetry | Semantic Conventions for Generative AI](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
-- [OpenTelemetry Environment Variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
+Do not set an explicit trace endpoint, protocol, or headers in Langfuse mode.
+The shared trace timeout below is allowed. Supplying `LANGFUSE_BASE_URL` without
+both keys is an incomplete mode and fails configuration validation.
+
+### Mode 2: Explicit OTLP/HTTP traces
+
+Set the complete trace signal endpoint. The protocol can be omitted because the
+adapter materializes `http/protobuf`; if supplied, it is matched
+case-insensitively and normalized to that value. Headers are optional:
+
+```dotenv
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com/v1/traces
+OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_TRACES_HEADERS=authorization=Bearer%20replace-me
+```
+
+Trace-specific endpoint semantics differ from generic OTLP base-endpoint
+semantics: the URL above is used exactly as configured. It must end once in
+`/v1/traces`; the exporter does not append another signal path.
+
+Header values use the OpenTelemetry environment format: comma-separated,
+percent-encoded `name=value` pairs. Do not quote or log credential-bearing
+header values.
+
+### Shared request timeout
+
+Either complete remote mode may set:
+
+```dotenv
+OTEL_EXPORTER_OTLP_TRACES_TIMEOUT=2
+```
+
+The value is seconds and must be finite, greater than `0`, and at most `2`.
+When the variable is omitted, remote export materializes an effective
+two-second timeout. Timeout alone is incomplete and does not enable export.
+
+The HTTP exporter can make one retry after a `ConnectionError`. At the maximum,
+the two bounded requests are designed to fit inside the five-second outer flush
+and leave additional room within Compose's ten-second termination grace period.
+
+## Endpoint and header safety
+
+Remote collectors must use HTTPS. Plaintext HTTP is allowed only for a
+loopback collector used in local development or deterministic tests. This
+prevents bearer or Basic credentials and trace payloads from crossing a remote
+network without transport encryption.
+
+The adapter rejects:
+
+- schemes other than HTTP or HTTPS;
+- remote plaintext HTTP;
+- missing hosts or ports outside the URL's valid range;
+- malformed DNS names, whitespace, or invalid percent encoding;
+- embedded usernames or passwords;
+- query strings and fragments;
+- endpoints that do not end exactly once in `/v1/traces`;
+- `grpc` and any protocol other than `http/protobuf`;
+- headers without valid `name=value` fields; and
+- control characters, including CRLF.
+
+The four documented trace endpoint, protocol, header, and timeout variables are
+the only accepted `OTEL_EXPORTER_OTLP_*` settings. Metric-specific,
+log-specific, and other exporter variables are rejected before ADK can
+interpret them. The supported settings sources are explicit constructor values,
+the process environment, and the current-directory `.env`; per-instance
+alternate dotenv, secrets-directory, and CLI source overrides are rejected so
+they cannot bypass that allowlist.
+
+Endpoint and header failures use stable, secret-free messages. They must not be
+diagnosed by printing the rejected values.
+
+## Failure behavior
+
+The exporter sends batches asynchronously. A collector that becomes
+unreachable after startup does not make `/live`, ADK's `/health`, or
+database-independent `/ready` fail. Those endpoints do not claim trace
+delivery.
+
+This fail-open application behavior is deliberate: telemetry loss must not take
+the agent out of service. Export attempts can emit SDK errors and spans can be
+dropped while the collector is unavailable. The template provides no
+store-and-forward queue, retry durability, or delivery guarantee. Monitor the
+collector and application logs separately.
+
+## Migrate from generic OTLP variables
+
+Earlier versions documented these global variables:
+
+```dotenv
+OTEL_EXPORTER_OTLP_ENDPOINT=...
+OTEL_EXPORTER_OTLP_PROTOCOL=...
+OTEL_EXPORTER_OTLP_HEADERS=...
+```
+
+Remove all three. They are now rejected rather than ignored because the pinned
+ADK runtime interprets a global endpoint as permission to create trace, metric,
+and log exporters.
+
+Then choose exactly one replacement:
+
+- Langfuse: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and optionally
+  `LANGFUSE_BASE_URL`; or
+- another collector: rename endpoint, protocol, and headers to their exact
+  `OTEL_EXPORTER_OTLP_TRACES_*` equivalents and make the endpoint a complete
+  HTTPS signal URL ending once in `/v1/traces`.
+
+Either replacement may optionally set the bounded trace timeout documented
+above.
+
+Do not leave old and new variables together. After changing a VM `.env`,
+recreate the service so the process receives the new environment.
+
+## Resource identity
+
+Exported spans use process-level resource attributes:
+
+| Attribute | Source | Purpose |
+| --- | --- | --- |
+| `service.name` | `AGENT_NAME` | Identifies the agent service |
+| `service.namespace` | `TELEMETRY_NAMESPACE`, default `local` | Groups environments or deployments |
+| `service.version` | `K_REVISION`, default `local` | Identifies the deployed revision |
+| `service.instance.id` | Process ID plus generated UUID | Distinguishes one server process |
+
+The adapter percent-encodes resource values in the OpenTelemetry environment
+format before ADK reads them, so commas, equals signs, or control characters in
+a value cannot create extra attributes. It also removes a stale
+`OTEL_SERVICE_NAME` override so `AGENT_NAME` remains authoritative.
+
+Do not place secrets or personal data in these values.
+
+## References
+
+- [OpenTelemetry OTLP exporter configuration](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/)
+- [OpenTelemetry exception conventions](https://opentelemetry.io/docs/specs/otel/trace/exceptions/)
+- [Langfuse OpenTelemetry ingestion](https://langfuse.com/integrations/native/opentelemetry)
+- [Architecture](../architecture.md)
+- [Environment variables](environment-variables.md)

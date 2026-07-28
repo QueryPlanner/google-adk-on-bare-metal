@@ -13,7 +13,7 @@ dependencies = [
     "google-auth>=2.40.3,<3.0.0",
     "google-cloud-logging>=3.12.1,<4.0.0",
     "opentelemetry-exporter-gcp-logging>=1.9.0a0,<2.0.0",
-    "opentelemetry-exporter-otlp-proto-grpc==1.37.0",
+    "opentelemetry-exporter-otlp-proto-http==1.37.0",
     "opentelemetry-instrumentation-google-genai>=0.6b0,<1",
     "opentelemetry-instrumentation-logging>=0.58b0,<0.59",
     "pydantic>=2.11.0,<3.0.0",
@@ -40,7 +40,6 @@ dev = [
     "pytest-asyncio>=1.2.0,<2.0.0",
     "pyyaml>=6.0.3,<7.0.0",
     "ipykernel>=7.0.0,<8.0.0",
-    "types-grpcio>=1.0.0.20251009,<2.0.0.0",
 ]
 
 [build-system]
@@ -105,9 +104,7 @@ source = ["src"]
 branch = true
 omit = [
     "src/agent/**/__init__.py",
-    "src/agent/server.py",
     "src/agent/**/agent.py",
-    "src/agent/utils/observability.py",
 ]
 
 [tool.coverage.report]

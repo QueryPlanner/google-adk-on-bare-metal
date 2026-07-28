@@ -68,9 +68,9 @@ provider, tools, or artifact capacity after startup. `/live` and ADK's legacy
 ### Google Cloud (Optional)
 
 **GOOGLE_CLOUD_PROJECT**
-- **When:** Optional (required for Vertex AI or Cloud Observability)
+- **When:** Optional (required for Vertex AI)
 - **Value:** Your GCP project ID
-- **Purpose:** Identifies the Google Cloud project
+- **Purpose:** Identifies the Google Cloud project used by model calls
 
 **GOOGLE_CLOUD_LOCATION**
 - **When:** Optional
@@ -82,7 +82,7 @@ provider, tools, or artifact capacity after startup. `/live` and ADK's legacy
 **AGENT_NAME**
 - **When:** Required
 - **Value:** Unique identifier (e.g., `my-agent`)
-- **Purpose:** Identifies logs and traces
+- **Purpose:** Identifies the agent service and its trace resource
 
 **AGENT_DIR**
 - **When:** Optional
@@ -150,37 +150,104 @@ authenticated HTTPS reverse proxy.
 
 **OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT**
 - **Default:** `FALSE`
-- **Purpose:** Capture full prompts/responses in traces. Set to `TRUE` to see conversation content in Langfuse or Jaeger.
+- **Purpose:** Privacy-sensitive opt-in for structured prompt/response fields
+  and tool argument/result attributes in traces
+
+The server materializes this choice across ADK's current and legacy content
+controls. When it is `FALSE`, the OpenInference ADK instrumentor is not enabled,
+so the exported span shape is intentionally smaller than opt-in mode. When it is
+`TRUE`, both ADK content controls are enabled and OpenInference instrumentation
+is added.
+
+`FALSE` is not arbitrary redaction and does not make traces anonymous.
+OpenTelemetry exception messages, stack traces, and status descriptions can
+contain runtime content. Exported metadata can also include service and process
+identity, span names, timing and status, static agent or tool descriptions,
+model or tool names, token counts, and ADK user, session, invocation, or
+conversation identifiers. Treat the collector as a destination for sensitive
+operational metadata and sanitize exception text.
 
 ### Observability (Langfuse)
 
 **LANGFUSE_PUBLIC_KEY**
+- **When:** Optional; must be set together with `LANGFUSE_SECRET_KEY`
 - **Value:** `pk-lf-...`
-- **Purpose:** Automatically configures OTel to export to Langfuse.
+- **Purpose:** Langfuse project identity used to derive trace authentication
 
 **LANGFUSE_SECRET_KEY**
+- **When:** Optional; must be set together with `LANGFUSE_PUBLIC_KEY`
 - **Value:** `sk-lf-...`
-- **Purpose:** Authentication for Langfuse OTLP.
+- **Purpose:** Langfuse secret used to derive trace authentication
 
 **LANGFUSE_BASE_URL**
-- **Default:** `https://cloud.langfuse.com`
-- **Options:** `https://us.cloud.langfuse.com` or your self-hosted URL.
+- **Default in complete Langfuse mode:** `https://cloud.langfuse.com`
+- **Options:** A regional Langfuse host such as
+  `https://us.cloud.langfuse.com`, or a self-hosted base URL
 
-### Observability (Generic OTLP)
+Complete Langfuse credentials select one atomic configuration mode. The server
+derives the full trace endpoint
+`<base>/api/public/otel/v1/traces`, fixes the protocol to `http/protobuf`, and
+derives these logical request headers without logging their values:
 
-**OTEL_EXPORTER_OTLP_ENDPOINT**
+```text
+Authorization: Basic <base64(public-key:secret-key)>
+x-langfuse-ingestion-version: 4
+```
+
+The serialized OpenTelemetry header value is percent-encoded; for example, the
+space after `Basic` is represented as `%20`. Langfuse mode must not be combined
+with an explicit trace endpoint, protocol, or headers. The shared trace timeout
+below may accompany Langfuse. A base URL without both keys, incomplete
+credentials, and mixed modes fail before the server binds.
+
+### Observability (Explicit Trace OTLP)
+
+**OTEL_EXPORTER_OTLP_TRACES_ENDPOINT**
 - **When:** Optional
-- **Purpose:** Explicit OTLP collector endpoint
+- **Value:** Complete trace signal URL ending exactly once in `/v1/traces`
+- **Purpose:** Selects an explicit OTLP/HTTP trace collector
 
-**OTEL_EXPORTER_OTLP_PROTOCOL**
+**OTEL_EXPORTER_OTLP_TRACES_PROTOCOL**
+- **Default when explicit export is enabled:** `http/protobuf`
+- **Allowed value:** `http/protobuf`
+- **Purpose:** Selects the only transport supported by this template
+
+**OTEL_EXPORTER_OTLP_TRACES_HEADERS**
 - **When:** Optional
-- **Purpose:** Explicit OTLP transport protocol, such as `http/protobuf`
+- **Value:** Comma-separated, percent-encoded `name=value` pairs
+- **Purpose:** Supplies trace-collector authentication or routing headers
 
-**OTEL_EXPORTER_OTLP_HEADERS**
-- **When:** Optional
-- **Purpose:** Authentication headers for the OTLP collector
+**OTEL_EXPORTER_OTLP_TRACES_TIMEOUT**
+- **When:** Optional; requires either complete Langfuse or explicit trace mode
+- **Effective default during remote export:** `2` seconds
+- **Allowed range:** Finite, greater than `0`, and at most `2` seconds
+- **Purpose:** Bounds each OTLP/HTTP export request
 
-Explicit OTLP values take precedence over values derived from Langfuse credentials.
+Explicit trace mode must not include any `LANGFUSE_*` value. A remote endpoint
+must use HTTPS. Plaintext HTTP is accepted only for a loopback collector.
+Endpoints with embedded credentials, queries, or fragments are rejected, as
+are malformed headers and CRLF characters. Validation failures use generic
+messages and do not echo the endpoint, credentials, or header values.
+
+The timeout is shared by both remote modes and does not select a mode. Timeout
+alone fails configuration validation. At the two-second maximum, the HTTP
+exporter's single `ConnectionError` retry is designed to fit inside the
+five-second outer flush and leave additional room within Compose's ten-second
+stop grace period.
+
+`grpc` is not supported. This template configures no OTLP metric or log
+exporter, HTTP server instrumentation, Cloud Trace or Cloud Logging exporter,
+or bundled OpenTelemetry Collector.
+
+The endpoint, protocol, headers, and timeout above are the only accepted
+`OTEL_EXPORTER_OTLP_*` settings. Metric-specific, log-specific, and other
+exporter settings are rejected before the server binds.
+
+Legacy generic `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_PROTOCOL`, and `OTEL_EXPORTER_OTLP_HEADERS` values are
+rejected rather than ignored. The pinned ADK runtime would otherwise interpret a
+generic endpoint as permission to configure traces, metrics, and logs. Remove
+all three legacy values before selecting either supported mode.
 
 ## Environment Variable Precedence
 
@@ -193,8 +260,10 @@ Explicit OTLP values take precedence over values derived from Langfuse credentia
 Run server commands from the repository root when relying on `.env`. Container and
 VM-injected environment variables always take priority over values in that file.
 Server and observability settings read the current-directory file without copying
-its contents into the process environment. The server publishes only the validated
-standard `OTEL_*` values required by the OpenTelemetry SDK before instrumentation.
+its contents into the process environment. Before instrumentation, the server
+publishes validated resource and content controls plus any configured
+trace-specific `OTEL_EXPORTER_OTLP_TRACES_*` values. It does not publish generic
+OTLP exporter values.
 
 Supported ADK and server entry points load agent provider and memory variables
 before importing the agent definition while preserving existing process values. A

@@ -10,7 +10,9 @@ We believe you should own your agents. This template is designed to strip away t
 - 🐳 **Deploy Anywhere**: Pre-configured Docker & Compose setup. Runs on Hetzner, DigitalOcean, or your basement server.
 - 🛠️ **Automated Setup**: Includes a `setup.sh` script to harden your server (UFW, Fail2Ban) and install dependencies in minutes.
 - 🔄 **CI/CD Included**: GitHub Actions workflow builds multi-arch images (AMD64/ARM64) and pushes to GHCR automatically.
-- 🔭 **Open Observability**: Built-in OpenTelemetry (OTel) instrumentation. Pre-configured for **Langfuse**, but easily adaptable to Jaeger, Prometheus, or any OTel-compatible backend.
+- 🔭 **Trace Observability**: ADK-owned OpenTelemetry tracing with structured
+  message and tool payloads elided by default, plus optional trace-only
+  OTLP/HTTP export.
 - 🚀 **Modern Stack**: Python 3.13, `uv`, `fastapi`, `asyncpg`.
 - 💾 **VM Persistence**: Postgres-backed sessions and local artifacts retained
   across normal process and container recreation.
@@ -141,9 +143,26 @@ requirements and the migration checks for existing VMs.
 
 ## Observability
 
-The template comes pre-wired with **OpenTelemetry**. By default, it's set up to export traces to **Langfuse** for beautiful, actionable insights into your agent's performance and costs.
+Google ADK owns the process-wide OpenTelemetry provider and its internal trace
+processors. Remote export is off until you configure one complete mode:
+Langfuse credentials or an explicit
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Both modes send traces over
+HTTP/protobuf only; this template does not configure OTLP metrics or logs.
+Each remote request has an effective two-second timeout. An optional
+`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` override must be finite, greater than zero,
+and at most two seconds; it does not enable export by itself.
 
-To change the backend, simply update the OTel exporter configuration in your `.env`. You are not locked into any specific observability vendor.
+Structured prompt/response fields and tool arguments/results are elided by
+default. This is not arbitrary redaction: OpenTelemetry exception messages,
+stack traces, and status descriptions can still contain runtime content, while
+static agent or tool descriptions and operational identifiers remain metadata.
+Treat the collector as sensitive telemetry and keep secrets out of exception
+text. Set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` only as an
+explicit privacy-sensitive opt-in.
+
+See the [observability guide](docs/base-infra/observability.md) for the two
+atomic configuration modes, endpoint restrictions, graceful-flush boundary,
+and migration from legacy generic OTLP variables.
 
 ## Documentation
 

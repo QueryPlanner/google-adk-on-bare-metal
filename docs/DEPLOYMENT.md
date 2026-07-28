@@ -133,6 +133,78 @@ emits one generic warning. Keep the endpoint on the loopback/internal operations
 path. If an ingress exposes it, require authentication and rate limiting so
 untrusted callers cannot amplify connection or log load.
 
+## Remote Trace Export
+
+Remote trace export is optional and does not participate in liveness or
+readiness. Google ADK owns the process-wide OpenTelemetry provider; the template
+preserves ADK's internal processors and configures at most one outbound
+OTLP/HTTP batch processor.
+
+Choose one complete mode in `.env`:
+
+- **Langfuse:** set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`.
+  `LANGFUSE_BASE_URL` is optional and defaults to
+  `https://cloud.langfuse.com`. The application derives the full
+  `/api/public/otel/v1/traces` endpoint and the Basic authentication plus
+  `x-langfuse-ingestion-version=4` trace headers.
+- **Explicit collector:** set the complete
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` ending once in `/v1/traces`, optionally
+  `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, and either omit
+  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` or set it to `http/protobuf`.
+
+Either complete mode may set `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`. It defaults
+effectively to two seconds and must be finite, greater than zero, and at most
+two seconds. Timeout alone is incomplete and does not enable export.
+
+Do not mix Langfuse settings with an explicit endpoint, protocol, or headers.
+Remote collectors require HTTPS; plaintext HTTP is accepted only for loopback
+development. Embedded URL credentials, query strings, fragments, malformed or
+CRLF-bearing headers, and `grpc` fail before the server binds without echoing
+the rejected values.
+
+Structured prompt/response fields and tool arguments/results are elided by
+default. Enabling
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` is a
+privacy-sensitive opt-in. Disabled content is not arbitrary redaction:
+exception messages, stack traces, status descriptions, static agent or tool
+descriptions, service identity, model and tool names, timing, token counts, and
+user, session, invocation, or conversation identifiers can still be exported.
+Sanitize exception text and treat the collector as sensitive.
+
+An unreachable collector does not fail `/live`, ADK's `/health`, or
+database-independent `/ready`; exporter errors and lost spans remain possible.
+On graceful termination, the application performs a best-effort flush for at
+most five seconds after ADK runner cleanup. Compose gives the process a
+ten-second stop grace period. `SIGKILL`, a host crash, or a shorter external
+deadline cannot flush queued spans.
+
+The template never calls `provider.shutdown()`. The OpenTelemetry SDK owns final
+shutdown through `atexit` on normal interpreter exit; Uvicorn's
+signal-termination path relies on the explicit outer flush instead.
+
+The two-second per-request maximum is designed to fit the HTTP exporter's one
+`ConnectionError` retry within that five-second flush and leave additional room
+inside the surrounding Compose grace period.
+
+The deployment contract is one server process using `python -m agent.server` or
+`uv run server`. This pull request does not support pre-fork workers, OTLP
+metrics or logs, HTTP server tracing, Cloud Trace or Cloud Logging export, or a
+bundled collector.
+
+Only the documented trace endpoint, protocol, header, and timeout variables are
+accepted. Metric-specific, log-specific, and other
+`OTEL_EXPORTER_OTLP_*` settings fail configuration validation.
+
+Existing VMs must remove the legacy generic
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, and
+`OTEL_EXPORTER_OTLP_HEADERS` variables before selecting either mode. Those
+values are rejected because the pinned ADK runtime could otherwise enable
+trace, metric, and log exporters. Recreate the container after updating
+`.env`; do not leave generic and trace-specific variables together.
+
+See [Trace Observability with OpenTelemetry](base-infra/observability.md) for
+the complete privacy, endpoint, and failure contract.
+
 ## Artifact Storage Contract
 
 The local artifact root is not independently configurable. It is always

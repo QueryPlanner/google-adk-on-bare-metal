@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "docker-publish.yml"
@@ -404,7 +405,7 @@ def test_remote_script_forbids_mutable_or_destructive_deploy_operations() -> Non
 def test_compose_resolves_one_exact_digest_without_repository_secrets(
     tmp_path: Path,
 ) -> None:
-    """Ask the real Compose parser to resolve the digest in an isolated copy."""
+    """Resolve the deploy image and trace service identity with real Compose."""
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("Docker CLI is unavailable")
@@ -414,7 +415,10 @@ def test_compose_resolves_one_exact_digest_without_repository_secrets(
         compose_path.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (tmp_path / ".env").write_text("", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "AGENT_NAME=production-agent\n",
+        encoding="utf-8",
+    )
     environment = {
         "COMPOSE_DISABLE_ENV_FILE": "1",
         "HOME": os.environ.get("HOME", str(tmp_path)),
@@ -434,7 +438,6 @@ def test_compose_resolves_one_exact_digest_without_repository_secrets(
             "-f",
             "compose.yaml",
             "config",
-            "--images",
         ],
         cwd=tmp_path,
         env=environment,
@@ -444,7 +447,11 @@ def test_compose_resolves_one_exact_digest_without_repository_secrets(
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [EXPECTED_IMAGE]
+    resolved = yaml.safe_load(result.stdout)
+    agent = resolved["services"]["agent"]
+
+    assert agent["image"] == EXPECTED_IMAGE
+    assert agent["environment"]["AGENT_NAME"] == "production-agent"
 
 
 @pytest.mark.parametrize(
@@ -553,6 +560,8 @@ def test_remote_deploy_uses_exact_commit_digest_and_literal_secrets(
     environment_document = (project_directory / ".env").read_text(encoding="utf-8")
     for secret_value in SECRET_CANARIES.values():
         assert secret_value in environment_document
+    assert "LANGFUSE_BASE_URL=https://observability.example\n" in environment_document
+    assert "\nLANGFUSE_HOST=" not in environment_document
 
 
 def test_remote_deploy_checks_out_real_git_commit_detached(

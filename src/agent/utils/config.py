@@ -4,10 +4,21 @@ This module provides Pydantic models for type-safe environment variable validati
 and configuration management.
 """
 
+import ipaddress
 import json
+import os
+import re
 import warnings
 from typing import Any, Literal, Self, cast
-from urllib.parse import SplitResult, unquote_plus, urlsplit, urlunsplit
+from urllib.parse import (
+    ParseResult,
+    SplitResult,
+    unquote,
+    unquote_plus,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+)
 
 from pydantic import (
     Field,
@@ -16,9 +27,23 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, SettingsConfigDict
 
 _DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+_DEFAULT_OTLP_TRACE_TIMEOUT_SECONDS = 2.0
+_HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_HTTP_HEADER_VALUE = re.compile(r"^[\x20-\x7e]*$")
+_OTLP_HEADER_RAW_VALUE = re.compile(r"^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*$")
+_DNS_LABEL = re.compile(r"^(?!-)[0-9A-Za-z-]{1,63}(?<!-)$")
+_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_SUPPORTED_OTLP_SETTINGS = frozenset(
+    {
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    }
+)
 _EXAMPLE_SECRET_VALUES = {
     "DATABASE_URL": frozenset(
         {
@@ -200,6 +225,127 @@ def _blank_optional_value(value: Any) -> Any:
     if isinstance(raw_value, str) and not raw_value.strip():
         return None
     return value
+
+
+def _reject_non_trace_otlp_settings(keys: Any) -> None:
+    """Reject every unvalidated OTLP variable without echoing its key."""
+    for key in keys:
+        normalized_key = str(key).upper()
+        if (
+            normalized_key.startswith("OTEL_EXPORTER_OTLP_")
+            and normalized_key not in _SUPPORTED_OTLP_SETTINGS
+        ):
+            msg = (
+                "Unsupported OTLP exporter setting; use only the trace endpoint, "
+                "protocol, headers, and timeout settings"
+            )
+            raise SettingsConfigurationError(msg)
+
+
+def _parse_safe_http_endpoint(endpoint: str) -> ParseResult:
+    """Return a validated HTTP endpoint without including it in failures."""
+    try:
+        parsed = urlparse(endpoint)
+        port = parsed.port
+        decoded_endpoint = unquote(endpoint)
+    except (UnicodeError, ValueError):
+        msg = "OTLP endpoints must be valid HTTP(S) URLs"
+        raise SettingsConfigurationError(msg) from None
+
+    if (
+        endpoint != endpoint.strip()
+        or _PERCENT_ESCAPE.search(endpoint) is not None
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in decoded_endpoint
+        )
+        or "\\" in decoded_endpoint
+        or parsed.scheme.casefold() not in {"http", "https"}
+        or not parsed.hostname
+        or not _is_valid_endpoint_hostname(parsed.hostname)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or port == 0
+    ):
+        msg = (
+            "OTLP endpoints must be HTTP(S) URLs without credentials, "
+            "queries, fragments, or control characters"
+        )
+        raise SettingsConfigurationError(msg)
+
+    hostname = parsed.hostname
+    if parsed.scheme.casefold() == "http" and not _is_loopback_host(hostname):
+        msg = "Plaintext OTLP endpoints are restricted to loopback hosts"
+        raise SettingsConfigurationError(msg)
+
+    return parsed
+
+
+def _is_valid_endpoint_hostname(hostname: str) -> bool:
+    """Return whether a URL hostname is an IP literal or a valid DNS name."""
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        normalized_hostname = hostname.rstrip(".")
+        return (
+            bool(normalized_hostname)
+            and not hostname.endswith("..")
+            and len(normalized_hostname) <= 253
+            and normalized_hostname.isascii()
+            and all(
+                _DNS_LABEL.fullmatch(label) is not None
+                for label in normalized_hostname.split(".")
+            )
+        )
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    """Return whether a hostname is explicitly local-only."""
+    normalized_hostname = hostname.rstrip(".").casefold()
+    if normalized_hostname == "localhost" or normalized_hostname.endswith(".localhost"):
+        return True
+
+    try:
+        return ipaddress.ip_address(normalized_hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_otlp_headers(headers: str) -> None:
+    """Validate OTLP header syntax without retaining or disclosing credentials."""
+    seen_names: set[str] = set()
+    for raw_header in headers.split(","):
+        if not raw_header or "=" not in raw_header:
+            msg = "OTLP trace headers must use comma-separated name=value pairs"
+            raise SettingsConfigurationError(msg)
+
+        raw_name, raw_value = raw_header.split("=", maxsplit=1)
+        if (
+            _PERCENT_ESCAPE.search(raw_name)
+            or _PERCENT_ESCAPE.search(raw_value)
+            or _OTLP_HEADER_RAW_VALUE.fullmatch(raw_value) is None
+        ):
+            msg = "OTLP trace headers contain invalid syntax or percent encoding"
+            raise SettingsConfigurationError(msg)
+
+        name = unquote(raw_name)
+        value = unquote(raw_value)
+        normalized_name = name.casefold()
+        if (
+            not name
+            or _HTTP_HEADER_NAME.fullmatch(name) is None
+            or _HTTP_HEADER_VALUE.fullmatch(value) is None
+        ):
+            msg = "OTLP trace headers contain an invalid name or value"
+            raise SettingsConfigurationError(msg)
+        if normalized_name in seen_names:
+            msg = "OTLP trace headers must not contain duplicate names"
+            raise SettingsConfigurationError(msg)
+        seen_names.add(normalized_name)
 
 
 def initialize_environment[T: BaseSettings](
@@ -412,25 +558,32 @@ class ObservabilityEnv(RedactedBaseSettings):
         alias="LANGFUSE_SECRET_KEY",
         description="Langfuse secret key",
     )
-    langfuse_base_url: str = Field(
-        default=_DEFAULT_LANGFUSE_BASE_URL,
+    langfuse_base_url: str | None = Field(
+        default=None,
         alias="LANGFUSE_BASE_URL",
-        description="Langfuse API base URL",
+        description="Optional Langfuse API base URL override",
     )
-    otel_exporter_otlp_endpoint: str | None = Field(
+    otel_exporter_otlp_traces_endpoint: str | None = Field(
         default=None,
-        alias="OTEL_EXPORTER_OTLP_ENDPOINT",
-        description="Explicit OTLP exporter endpoint",
+        alias="OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        description="Explicit OTLP/HTTP trace endpoint",
     )
-    otel_exporter_otlp_protocol: str | None = Field(
+    otel_exporter_otlp_traces_protocol: str | None = Field(
         default=None,
-        alias="OTEL_EXPORTER_OTLP_PROTOCOL",
-        description="Explicit OTLP exporter protocol",
+        alias="OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+        description="Explicit OTLP trace protocol (http/protobuf only)",
     )
-    otel_exporter_otlp_headers: SecretStr | None = Field(
+    otel_exporter_otlp_traces_headers: SecretStr | None = Field(
         default=None,
-        alias="OTEL_EXPORTER_OTLP_HEADERS",
-        description="Explicit OTLP exporter authentication headers",
+        alias="OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        description="Explicit OTLP trace authentication headers",
+    )
+    otel_exporter_otlp_traces_timeout: float | None = Field(
+        default=None,
+        alias="OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        gt=0,
+        le=_DEFAULT_OTLP_TRACE_TIMEOUT_SECONDS,
+        description="Bounded OTLP/HTTP request timeout in seconds",
     )
     otel_capture_message_content: bool = Field(
         default=False,
@@ -449,9 +602,10 @@ class ObservabilityEnv(RedactedBaseSettings):
     @field_validator(
         "langfuse_public_key",
         "langfuse_secret_key",
-        "otel_exporter_otlp_endpoint",
-        "otel_exporter_otlp_protocol",
-        "otel_exporter_otlp_headers",
+        "otel_exporter_otlp_traces_endpoint",
+        "otel_exporter_otlp_traces_protocol",
+        "otel_exporter_otlp_traces_headers",
+        "otel_exporter_otlp_traces_timeout",
         mode="before",
     )
     @classmethod
@@ -462,11 +616,97 @@ class ObservabilityEnv(RedactedBaseSettings):
     @field_validator("langfuse_base_url", mode="before")
     @classmethod
     def _normalize_blank_langfuse_base_url(cls, value: Any) -> Any:
-        """Use the local default when the selected Langfuse URL is blank."""
+        """Treat a selected blank Langfuse base URL as unconfigured."""
+        return _blank_optional_value(value)
+
+    def __init__(self, **values: Any) -> None:
+        """Reject non-trace OTLP variables from every supported settings source."""
+        if any(str(key).startswith("_") for key in values):
+            msg = (
+                "Per-instance observability settings source overrides are not supported"
+            )
+            raise SettingsConfigurationError(msg)
+        _reject_non_trace_otlp_settings(values)
+        _reject_non_trace_otlp_settings(os.environ)
+        dotenv_values = DotEnvSettingsSource(type(self))()
+        _reject_non_trace_otlp_settings(dotenv_values)
+        super().__init__(**values)
+
+    @model_validator(mode="after")
+    def _validate_observability_mode(self) -> Self:
+        """Validate one complete, safe, HTTP/protobuf trace export mode."""
+        public_key_configured = self.langfuse_public_key is not None
+        secret_key_configured = self.langfuse_secret_key is not None
+        langfuse_setting_configured = (
+            public_key_configured
+            or secret_key_configured
+            or self.langfuse_base_url is not None
+        )
+
+        explicit_endpoint = self.otel_exporter_otlp_traces_endpoint
+        explicit_protocol = self.otel_exporter_otlp_traces_protocol
+        explicit_headers = self.otel_exporter_otlp_traces_headers
+        explicit_timeout = self.otel_exporter_otlp_traces_timeout
+        explicit_mode = any(
+            value is not None
+            for value in (explicit_endpoint, explicit_protocol, explicit_headers)
+        )
+        if explicit_mode and langfuse_setting_configured:
+            msg = "Langfuse and explicit OTLP trace settings are mutually exclusive"
+            raise SettingsConfigurationError(msg)
+        if langfuse_setting_configured and not (
+            public_key_configured and secret_key_configured
+        ):
+            msg = "Langfuse export requires both public and secret keys"
+            raise SettingsConfigurationError(msg)
+
+        if explicit_endpoint is None and (
+            explicit_protocol is not None or explicit_headers is not None
+        ):
+            msg = "OTLP trace protocol and headers require a trace endpoint"
+            raise SettingsConfigurationError(msg)
+        if explicit_timeout is not None and not (
+            explicit_endpoint is not None
+            or (public_key_configured and secret_key_configured)
+        ):
+            msg = "OTLP trace timeout requires a complete remote export mode"
+            raise SettingsConfigurationError(msg)
+
+        if (
+            explicit_protocol is not None
+            and explicit_protocol.casefold() != "http/protobuf"
+        ):
+            msg = "Only the OTLP http/protobuf trace protocol is supported"
+            raise SettingsConfigurationError(msg)
+        if explicit_protocol is not None:
+            self.otel_exporter_otlp_traces_protocol = explicit_protocol.casefold()
+
+        if explicit_endpoint is not None:
+            parsed_endpoint = _parse_safe_http_endpoint(explicit_endpoint)
+            if (
+                not parsed_endpoint.path.endswith("/v1/traces")
+                or parsed_endpoint.path.count("/v1/traces") != 1
+            ):
+                msg = "The OTLP trace endpoint must end exactly once in /v1/traces"
+                raise SettingsConfigurationError(msg)
+        if explicit_headers is not None:
+            _validate_otlp_headers(explicit_headers.get_secret_value())
+        if public_key_configured and secret_key_configured:
+            _parse_safe_http_endpoint(self.effective_langfuse_base_url)
+
+        return self
+
+    @property
+    def effective_langfuse_base_url(self) -> str:
+        """Return the configured Langfuse base or the hosted default."""
+        return self.langfuse_base_url or _DEFAULT_LANGFUSE_BASE_URL
+
+    @property
+    def effective_otel_exporter_otlp_traces_timeout(self) -> float:
+        """Return the bounded HTTP request timeout used for remote export."""
         return (
-            _DEFAULT_LANGFUSE_BASE_URL
-            if _blank_optional_value(value) is None
-            else value
+            self.otel_exporter_otlp_traces_timeout
+            or _DEFAULT_OTLP_TRACE_TIMEOUT_SECONDS
         )
 
 

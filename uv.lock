@@ -590,7 +590,7 @@ dependencies = [
     { name = "mem0ai" },
     { name = "openinference-instrumentation-google-adk" },
     { name = "opentelemetry-exporter-gcp-logging" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation-google-genai" },
     { name = "opentelemetry-instrumentation-logging" },
     { name = "pydantic" },
@@ -607,7 +607,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pyyaml" },
     { name = "ruff" },
-    { name = "types-grpcio" },
 ]
 
 [package.metadata]
@@ -623,7 +622,7 @@ requires-dist = [
     { name = "mem0ai", specifier = ">=0.1.0" },
     { name = "openinference-instrumentation-google-adk", specifier = ">=0.1.17" },
     { name = "opentelemetry-exporter-gcp-logging", specifier = ">=1.9.0a0,<2.0.0" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = "==1.37.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = "==1.37.0" },
     { name = "opentelemetry-instrumentation-google-genai", specifier = ">=0.6b0,<1" },
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.58b0,<0.59" },
     { name = "pydantic", specifier = ">=2.11.0,<3.0.0" },
@@ -640,7 +639,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0,<8.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3,<7.0.0" },
     { name = "ruff", specifier = ">=0.12.7,<1.0.0" },
-    { name = "types-grpcio", specifier = ">=1.0.0.20251009,<2.0.0.0" },
 ]
 
 [[package]]
@@ -2018,24 +2016,6 @@ wheels = [
 ]
 
 [[package]]
-name = "opentelemetry-exporter-otlp-proto-grpc"
-version = "1.37.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "grpcio" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-common" },
-    { name = "opentelemetry-proto" },
-    { name = "opentelemetry-sdk" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/11/4ad0979d0bb13ae5a845214e97c8d42da43980034c30d6f72d8e0ebe580e/opentelemetry_exporter_otlp_proto_grpc-1.37.0.tar.gz", hash = "sha256:f55bcb9fc848ce05ad3dd954058bc7b126624d22c4d9e958da24d8537763bec5", size = 24465, upload-time = "2025-09-11T10:29:04.172Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/17/46630b74751031a658706bef23ac99cdc2953cd3b2d28ec90590a0766b3e/opentelemetry_exporter_otlp_proto_grpc-1.37.0-py3-none-any.whl", hash = "sha256:aee5104835bf7993b7ddaaf380b6467472abaedb1f1dbfcc54a52a7d781a3890", size = 19305, upload-time = "2025-09-11T10:28:45.776Z" },
-]
-
-[[package]]
 name = "opentelemetry-exporter-otlp-proto-http"
 version = "1.37.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3085,15 +3065,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/17/d4/064570dec6358aa9049d4708e4a10407d74c99258f8b2136bb8702303f1a/typer_slim-0.21.1.tar.gz", hash = "sha256:73495dd08c2d0940d611c5a8c04e91c2a0a98600cbd4ee19192255a233b6dbfd", size = 110478, upload-time = "2026-01-06T11:21:11.176Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/0a/4aca634faf693e33004796b6cee0ae2e1dba375a800c16ab8d3eff4bb800/typer_slim-0.21.1-py3-none-any.whl", hash = "sha256:6e6c31047f171ac93cc5a973c9e617dbc5ab2bddc4d0a3135dc161b4e2020e0d", size = 47444, upload-time = "2026-01-06T11:21:12.441Z" },
-]
-
-[[package]]
-name = "types-grpcio"
-version = "1.0.0.20251009"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/93/78aa083216853c667c9412df4ef8284b2a68c6bcd2aef833f970b311f3c1/types_grpcio-1.0.0.20251009.tar.gz", hash = "sha256:a8f615ea7a47b31f10da028ab5258d4f1611fbd70719ca450fc0ab3fb9c62b63", size = 14479, upload-time = "2025-10-09T02:54:14.539Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/93/66d28f41b16bb4e6b611bd608ef28dffc740facec93250b30cf83138da21/types_grpcio-1.0.0.20251009-py3-none-any.whl", hash = "sha256:112ac4312a5b0a273a4c414f7f2c7668f342990d9c6ab0f647391c36331f95ed", size = 15208, upload-time = "2025-10-09T02:54:13.588Z" },
 ]
 
 [[package]]

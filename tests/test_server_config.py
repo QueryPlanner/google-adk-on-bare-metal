@@ -2,8 +2,10 @@
 
 import logging
 import os
+import runpy
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock, create_autospec, patch
@@ -11,6 +13,7 @@ from unittest.mock import MagicMock, create_autospec, patch
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from google.adk.cli.fast_api import get_fast_api_app
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
@@ -43,13 +46,81 @@ def _agent_dir(
 
 def _mock_instrumentor() -> MagicMock:
     """Return a strict mock for the external ADK instrumentor."""
-    return cast(
+    instrumentor_class = cast(
         MagicMock,
         create_autospec(
             GoogleADKInstrumentor,
             spec_set=True,
         ),
     )
+    instrumentor_class.return_value.is_instrumented_by_opentelemetry = False
+    return instrumentor_class
+
+
+@pytest.mark.parametrize(
+    (
+        "capture_content",
+        "is_instrumented",
+        "expected_instrument_calls",
+        "expected_uninstrument_calls",
+    ),
+    [
+        (True, False, 1, 0),
+        (True, True, 0, 0),
+        (False, True, 0, 1),
+        (False, False, 0, 0),
+    ],
+)
+def test_content_instrumentor_reconciles_process_global_state(
+    capture_content: bool,
+    is_instrumented: bool,
+    expected_instrument_calls: int,
+    expected_uninstrument_calls: int,
+) -> None:
+    """Prevent a previous opt-in from surviving a later disabled app factory."""
+    instrumentor_class = _mock_instrumentor()
+    instrumentor = instrumentor_class.return_value
+    instrumentor.is_instrumented_by_opentelemetry = is_instrumented
+
+    with patch.object(
+        server,
+        "GoogleADKInstrumentor",
+        new=instrumentor_class,
+    ):
+        server._configure_content_instrumentation(capture_content)
+
+    instrumentor_class.assert_called_once_with()
+    assert instrumentor.instrument.call_count == expected_instrument_calls
+    assert instrumentor.uninstrument.call_count == expected_uninstrument_calls
+
+
+def test_real_content_instrumentor_can_transition_back_to_disabled() -> None:
+    """Prove a previous opt-in cannot survive a later disabled factory."""
+    script = """
+from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+from agent.server import _configure_content_instrumentation
+
+instrumentor = GoogleADKInstrumentor()
+if instrumentor.is_instrumented_by_opentelemetry:
+    instrumentor.uninstrument()
+try:
+    _configure_content_instrumentation(True)
+    assert instrumentor.is_instrumented_by_opentelemetry
+    _configure_content_instrumentation(False)
+    assert not instrumentor.is_instrumented_by_opentelemetry
+finally:
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentor.uninstrument()
+"""
+    result = subprocess.run(  # noqa: S603 - fixed interpreter and source
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("configured_agent_dir", [False, True])
@@ -63,6 +134,10 @@ def test_create_app_uses_typed_settings_and_explicit_artifact_uri(
     monkeypatch.setenv("AGENT_NAME", "test-agent")
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
     monkeypatch.setenv("TELEMETRY_NAMESPACE", "test-namespace")
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+        "true",
+    )
     agent_dir = _agent_dir(
         configured=configured_agent_dir,
         monkeypatch=monkeypatch,
@@ -116,6 +191,53 @@ def test_create_app_uses_typed_settings_and_explicit_artifact_uri(
     assert list(artifact_dir.iterdir()) == []
 
 
+async def test_create_app_without_persistence_skips_content_instrumentor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep local mode ready while content instrumentation remains opt-in."""
+    agent_dir = tmp_path / "agents"
+    agent_dir.mkdir()
+    test_app = FastAPI()
+    mock_get_app = create_autospec(
+        get_fast_api_app,
+        spec_set=True,
+        return_value=test_app,
+    )
+    mock_instrumentor_class = _mock_instrumentor()
+    monkeypatch.chdir(tmp_path)
+    environment = server.ServerEnv.model_validate(
+        {
+            "AGENT_DIR": str(agent_dir),
+            "AGENT_NAME": "local-test-agent",
+        }
+    )
+
+    with (
+        patch.object(server, "get_fast_api_app", new=mock_get_app),
+        patch.object(
+            server,
+            "GoogleADKInstrumentor",
+            new=mock_instrumentor_class,
+        ),
+    ):
+        app = server.create_app(environment)
+
+    ready_route = cast(
+        APIRoute,
+        next(route for route in app.routes if getattr(route, "path", None) == "/ready"),
+    )
+    ready_response = await ready_route.endpoint()
+    assert ready_response.status_code == 200
+    assert ready_response.body == (
+        b'{"status":"ready","checks":{"database":"not_configured"}}'
+    )
+    assert mock_get_app.call_args.kwargs["session_service_uri"] is None
+    mock_instrumentor_class.assert_called_once_with()
+    mock_instrumentor_class.return_value.instrument.assert_not_called()
+    mock_instrumentor_class.return_value.uninstrument.assert_not_called()
+
+
 def test_real_factory_exposes_one_secret_free_health_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -163,6 +285,9 @@ def test_real_factory_exposes_one_secret_free_health_contract(
     assert live_response.status_code == 200
     assert live_response.json() == {"status": "alive"}
     assert openapi_response.status_code == 200
+    mock_instrumentor_class.assert_called_once_with()
+    mock_instrumentor_class.return_value.instrument.assert_not_called()
+    mock_instrumentor_class.return_value.uninstrument.assert_not_called()
     ready_operation = openapi_response.json()["paths"]["/ready"]["get"]
     assert ready_operation.get("parameters", []) == []
     assert "requestBody" not in ready_operation
@@ -179,6 +304,46 @@ def test_real_factory_exposes_one_secret_free_health_contract(
 def test_import_has_no_application_or_storage_side_effect() -> None:
     """Require callers to opt into application and storage creation."""
     assert not hasattr(server, "app")
+
+
+def test_dunder_main_executes_the_supported_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Exercise the module guard without starting a real network listener."""
+    agent_dir = tmp_path / "agents"
+    agent_dir.mkdir()
+    test_app = FastAPI()
+    mock_get_app = create_autospec(
+        get_fast_api_app,
+        spec_set=True,
+        return_value=test_app,
+    )
+    mock_uvicorn_run = create_autospec(
+        uvicorn.run,
+        spec_set=True,
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("AGENT_NAME", "module-guard-test-agent")
+
+    with (
+        patch("google.adk.cli.fast_api.get_fast_api_app", new=mock_get_app),
+        patch("uvicorn.run", new=mock_uvicorn_run),
+        warnings.catch_warnings(),
+    ):
+        warnings.filterwarnings(
+            "ignore",
+            message=".*found in sys.modules.*",
+            category=RuntimeWarning,
+        )
+        runpy.run_module("agent.server", run_name="__main__")
+
+    mock_uvicorn_run.assert_called_once_with(
+        test_app,
+        host="127.0.0.1",
+        port=8080,
+    )
 
 
 def test_main_runs_factory_application(
