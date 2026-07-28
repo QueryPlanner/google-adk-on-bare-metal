@@ -3,7 +3,7 @@
 # ============================================================================
 # Shared Base: Single external Python image reference
 # ============================================================================
-FROM python:3.13-slim AS python-base
+FROM python:3.14-slim AS python-base
 
 # ============================================================================
 # Builder Stage: Install dependencies with optimal caching
