@@ -18,7 +18,7 @@ EXPECTED_HEALTHCHECK_BLOCK = """\
           import urllib.request;
           urllib.request.build_opener(
           urllib.request.ProxyHandler({})).open(
-          "http://127.0.0.1:8080/health", timeout=3).read()
+          "http://127.0.0.1:8080/ready", timeout=3).read()
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,8 +39,8 @@ def _indented_block(document: str, heading: str, indentation: int) -> str:
     return "\n".join(block)
 
 
-def test_agent_healthcheck_has_exact_process_liveness_contract() -> None:
-    """Keep one exec-form Python probe with an explicit small-VM timing policy."""
+def test_agent_healthcheck_has_exact_database_readiness_contract() -> None:
+    """Keep one bounded exec-form readiness probe for the small-VM runtime."""
     document = COMPOSE_PATH.read_text(encoding="utf-8")
     agent_block = _indented_block(document, "agent:", 2)
     healthcheck_block = _indented_block(agent_block, "healthcheck:", 4)
@@ -56,3 +56,6 @@ def test_operator_guides_wait_for_container_health() -> None:
     for guide_path in guide_paths:
         guide = guide_path.read_text(encoding="utf-8")
         assert "docker compose up --build --wait --wait-timeout 180" in guide
+        assert "`/ready`" in guide
+        assert "`/live`" in guide
+        assert "not_configured" in guide

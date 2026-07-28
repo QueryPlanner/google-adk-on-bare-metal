@@ -10,6 +10,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from google.adk.cli.fast_api import get_fast_api_app
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
@@ -18,6 +19,7 @@ from .artifact_storage import (
     ArtifactStorageError,
     prepare_artifact_storage,
 )
+from .health import DatabaseReadinessProbe, live
 from .utils import (
     ObservabilityEnv,
     ServerEnv,
@@ -27,15 +29,6 @@ from .utils import (
 )
 
 logger = logging.getLogger("agent.server")
-
-
-async def health() -> dict[str, str]:
-    """Health check endpoint for container orchestration.
-
-    Returns:
-        dict with status key indicating service health
-    """
-    return {"status": "ok"}
 
 
 def create_app(env: ServerEnv | None = None) -> FastAPI:
@@ -78,7 +71,17 @@ def create_app(env: ServerEnv | None = None) -> FastAPI:
         web=server_env.serve_web_interface,
         reload_agents=server_env.reload_agents,
     )
-    app.get("/health")(health)
+    readiness_probe = DatabaseReadinessProbe(
+        database_url=server_env.database_url,
+        attempt_timeout=server_env.db_readiness_probe_timeout,
+    )
+
+    async def ready() -> JSONResponse:
+        """Report configured PostgreSQL connectivity readiness."""
+        return await readiness_probe()
+
+    app.get("/live")(live)
+    app.get("/ready")(ready)
     return app
 
 
@@ -100,6 +103,7 @@ def main() -> None:
         RELOAD_AGENTS: Whether to reload agents on file changes (true/false)
         AGENT_ENGINE: Agent Engine instance for session and memory
         DATABASE_URL: Postgres URL for session and memory
+        DB_READINESS_PROBE_TIMEOUT: Maximum seconds for one HTTP database probe
         OPENROUTER_API_KEY: Key for LiteLLM/OpenRouter
         ALLOW_ORIGINS: JSON array string of allowed CORS origins
         HOST: Server host (default: 127.0.0.1, set to 0.0.0.0 for containers)

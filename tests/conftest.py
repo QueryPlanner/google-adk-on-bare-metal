@@ -402,6 +402,7 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "AGENT_DIR",
         "ARTIFACT_SERVICE_URI",
         "DATABASE_URL",
+        "DB_READINESS_PROBE_TIMEOUT",
         "DB_POOL_PRE_PING",
         "DB_POOL_RECYCLE",
         "DB_POOL_SIZE",

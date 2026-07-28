@@ -89,8 +89,18 @@ docker compose up --build --wait --wait-timeout 180
 ```
 
 The bounded `--wait` command returns only after the agent's container
-healthcheck passes, so scripts can distinguish a healthy startup from a
-container that merely started.
+healthcheck passes. Compose calls `/ready`, which runs one bounded PostgreSQL
+`SELECT 1` whenever `DATABASE_URL` is configured. Without PostgreSQL it reports
+`database: not_configured` and remains ready for local, in-memory, or Agent
+Engine-only development.
+
+`/live` and ADK's existing `/health` endpoint are process-only. Use `/ready` for
+traffic admission and deployment waits. It proves fresh PostgreSQL connectivity
+only—not ADK pool capacity, Agent Engine, model/provider, tool, or post-start
+artifact health.
+
+Keep `/ready` internal or behind authenticated, rate-limited ingress because
+each call opens one short-lived database connection.
 
 ## Artifact persistence
 

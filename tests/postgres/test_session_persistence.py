@@ -19,8 +19,10 @@ from urllib.parse import parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 import asyncpg  # type: ignore[import-untyped]
 import pytest
+from fastapi.testclient import TestClient
 
-from agent import pre_start
+from agent import pre_start, server
+from agent.utils import ServerEnv
 
 _ADMIN_URL_ENV = "TEST_POSTGRES_ADMIN_URL"
 _DATABASE_NAME_PATTERN = re.compile(r"\Aadk_test_[0-9a-f]{32}\Z")
@@ -289,6 +291,41 @@ async def _drop_role(admin_url: str, role_name: str) -> None:
         await connection.execute(
             f'DROP ROLE IF EXISTS "{role_name}"'  # noqa: S608
         )
+    finally:
+        await _close_connection(connection)
+
+
+async def _set_database_connections_allowed(
+    admin_url: str,
+    database_name: str,
+    *,
+    allowed: bool,
+) -> None:
+    """Toggle connections only for one generated isolated test database."""
+    database_name = _validate_database_name(database_name)
+    connection = await asyncpg.connect(
+        admin_url,
+        timeout=10,
+        command_timeout=10,
+    )
+    try:
+        allow_connections = "true" if allowed else "false"
+        await connection.execute(
+            f"""
+            ALTER DATABASE "{database_name}"
+            WITH ALLOW_CONNECTIONS {allow_connections}
+            """  # noqa: S608
+        )
+        if not allowed:
+            await connection.execute(
+                """
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = $1
+                  AND pid <> pg_backend_pid()
+                """,
+                database_name,
+            )
     finally:
         await _close_connection(connection)
 
@@ -685,6 +722,83 @@ async def test_database_readiness_succeeds_with_real_postgres(
         postgres_database_url,
         attempt_timeout=5,
     )
+
+
+def test_http_readiness_tracks_real_postgres_outage_and_recovery(
+    postgres_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep liveness up while one isolated database becomes unavailable."""
+    admin_url = os.environ[_ADMIN_URL_ENV]
+    monkeypatch.delenv(_ADMIN_URL_ENV)
+    parsed_database_url = urlsplit(postgres_database_url)
+    database_name = unquote(parsed_database_url.path.removeprefix("/"))
+    agent_dir = tmp_path / "agents"
+    agent_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ADK_DISABLE_LOAD_DOTENV", "true")
+    monkeypatch.setenv("ADK_DISABLE_LOCAL_STORAGE", "true")
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+    environment = ServerEnv.model_validate(
+        {
+            "AGENT_DIR": str(agent_dir),
+            "AGENT_NAME": "postgres-readiness-agent",
+            "ALLOW_ORIGINS": "[]",
+            "DATABASE_URL": postgres_database_url,
+            "DB_MAX_OVERFLOW": 0,
+            "DB_POOL_SIZE": 1,
+            "DB_POOL_TIMEOUT": 5,
+            "DB_READINESS_PROBE_TIMEOUT": 1,
+            "RELOAD_AGENTS": False,
+            "SERVE_WEB_INTERFACE": False,
+        }
+    )
+    with TestClient(server.create_app(environment)) as client:
+        initial_ready = client.get("/ready")
+        assert initial_ready.status_code == 200
+        assert initial_ready.json() == {
+            "status": "ready",
+            "checks": {"database": "healthy"},
+        }
+
+        try:
+            asyncio.run(
+                _set_database_connections_allowed(
+                    admin_url,
+                    database_name,
+                    allowed=False,
+                )
+            )
+
+            unavailable = client.get("/ready")
+            live = client.get("/live")
+            health = client.get("/health")
+
+            assert unavailable.status_code == 503
+            assert unavailable.json() == {
+                "status": "not_ready",
+                "checks": {"database": "unavailable"},
+            }
+            assert live.status_code == 200
+            assert live.json() == {"status": "alive"}
+            assert health.status_code == 200
+            assert health.json() == {"status": "ok"}
+        finally:
+            asyncio.run(
+                _set_database_connections_allowed(
+                    admin_url,
+                    database_name,
+                    allowed=True,
+                )
+            )
+
+        recovered = client.get("/ready")
+        assert recovered.status_code == 200
+        assert recovered.json() == {
+            "status": "ready",
+            "checks": {"database": "healthy"},
+        }
 
 
 @pytest.mark.asyncio

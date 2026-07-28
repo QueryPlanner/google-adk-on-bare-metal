@@ -116,20 +116,19 @@ def test_create_app_uses_typed_settings_and_explicit_artifact_uri(
     assert list(artifact_dir.iterdir()) == []
 
 
-def test_health_endpoint_reports_process_liveness(
+def test_real_factory_exposes_one_secret_free_health_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Verify the factory registers the container liveness contract."""
+    """Keep ADK health while adding explicit live and ready endpoints."""
     agent_dir = tmp_path / "agents"
     agent_dir.mkdir()
-    test_app = FastAPI()
-    mock_get_app = create_autospec(
-        get_fast_api_app,
-        spec_set=True,
-        return_value=test_app,
+    database_url = (
+        "postgresql://openapi-user:encoded%40db-secret-canary@127.0.0.1:1/"
+        "openapi-database"
     )
     mock_instrumentor_class = _mock_instrumentor()
+    monkeypatch.chdir(tmp_path)
 
     with (
         patch.dict(
@@ -137,10 +136,12 @@ def test_health_endpoint_reports_process_liveness(
             {
                 "AGENT_DIR": str(agent_dir),
                 "AGENT_NAME": "health-test-agent",
+                "ALLOW_ORIGINS": "[]",
+                "DATABASE_URL": database_url,
+                "OTEL_SDK_DISABLED": "true",
             },
             clear=True,
         ),
-        patch.object(server, "get_fast_api_app", new=mock_get_app),
         patch.object(
             server,
             "GoogleADKInstrumentor",
@@ -149,10 +150,30 @@ def test_health_endpoint_reports_process_liveness(
     ):
         app = server.create_app()
         with TestClient(app) as client:
-            response = client.get("/health")
+            health_response = client.get("/health")
+            live_response = client.get("/live")
+            openapi_response = client.get("/openapi.json")
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    route_paths = [getattr(route, "path", None) for route in app.routes]
+    assert route_paths.count("/health") == 1
+    assert route_paths.count("/live") == 1
+    assert route_paths.count("/ready") == 1
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok"}
+    assert live_response.status_code == 200
+    assert live_response.json() == {"status": "alive"}
+    assert openapi_response.status_code == 200
+    ready_operation = openapi_response.json()["paths"]["/ready"]["get"]
+    assert ready_operation.get("parameters", []) == []
+    assert "requestBody" not in ready_operation
+    for forbidden in (
+        database_url,
+        "openapi-user",
+        "encoded%40db-secret-canary",
+        "encoded@db-secret-canary",
+        "openapi-database",
+    ):
+        assert forbidden not in openapi_response.text
 
 
 def test_import_has_no_application_or_storage_side_effect() -> None:
