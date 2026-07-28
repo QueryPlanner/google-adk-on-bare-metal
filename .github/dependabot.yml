@@ -7,6 +7,21 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 4
+    # Keep breaking upgrades and incompatible OTel lines as explicit work.
+    # These update-type filters do not apply to security-only update jobs.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "opentelemetry-exporter-gcp-logging"
+        update-types:
+          - "version-update:semver-minor"
+      - dependency-name: "opentelemetry-exporter-otlp-proto-grpc"
+        update-types:
+          - "version-update:semver-minor"
+      - dependency-name: "opentelemetry-instrumentation-logging"
+        update-types:
+          - "version-update:semver-minor"
     commit-message:
       prefix: "chore(deps)"
 
@@ -15,6 +30,11 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 3
+    # Validate action major upgrades deliberately in their own pull requests.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "ci(deps)"
 
@@ -25,6 +45,12 @@ updates:
     open-pull-requests-limit: 2
     exclude-paths:
       - "compose.yaml"
+    # The application and test matrix currently support Python 3.13 only.
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
     commit-message:
       prefix: "build(deps)"
 
