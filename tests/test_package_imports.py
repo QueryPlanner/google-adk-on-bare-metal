@@ -114,6 +114,7 @@ def test_lazy_app_import_is_process_only_and_cached(tmp_path: Path) -> None:
         model = app.root_agent.model
         model_name = model if isinstance(model, str) else model.model
         result = {
+            "agent_module_cached": agent.agent.root_agent is app.root_agent,
             "app_name": app.name,
             "cached": agent.app is app,
             "dotenv_key_loaded": "OPENROUTER_API_KEY" in os.environ,
@@ -124,6 +125,7 @@ def test_lazy_app_import_is_process_only_and_cached(tmp_path: Path) -> None:
     )
 
     assert result == {
+        "agent_module_cached": True,
         "app_name": "agent",
         "cached": True,
         "dotenv_key_loaded": False,

@@ -7,20 +7,25 @@ agent or load its runtime environment.
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from google.adk.apps import App
 
+    agent: ModuleType
     app: App
 
-__all__ = ["app"]
+__all__ = ["agent", "app"]
 
 
 def __getattr__(name: str) -> Any:
-    """Load the public ADK app only when callers explicitly request it."""
-    if name != "app":
+    """Load the ADK module and app only when callers explicitly request them."""
+    if name not in __all__:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
 
-    from .agent import app as agent_app
+    from importlib import import_module
 
-    globals()["app"] = agent_app
-    return agent_app
+    agent_module = import_module(".agent", __name__)
+    globals()["agent"] = agent_module
+    globals()["app"] = agent_module.app
+    return globals()[name]

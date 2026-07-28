@@ -1,0 +1,44 @@
+{
+  "eval_set_id": "adk_compatibility",
+  "name": "Google ADK compatibility",
+  "description": "Verifies the template's real LiteLLM tool-call path.",
+  "eval_cases": [
+    {
+      "eval_id": "example_tool_once",
+      "conversation": [
+        {
+          "invocation_id": "example_tool_once_invocation",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Call example_tool exactly once. Then reply with exactly: Successfully used example_tool."
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Successfully used example_tool."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "example_tool",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "agent",
+        "user_id": "adk-compatibility-eval",
+        "state": {}
+      }
+    }
+  ]
+}
