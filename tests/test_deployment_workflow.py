@@ -217,6 +217,21 @@ def test_workflow_exposes_explicit_deploy_confirmation() -> None:
     assert "    needs: build" in deploy_block
 
 
+def test_reusable_quality_call_grants_only_codecov_oidc_permissions() -> None:
+    """Keep the called quality workflow authenticated and least privilege."""
+    document = WORKFLOW_PATH.read_text(encoding="utf-8")
+    quality_block = _indented_block(document, "quality:", 2)
+    permissions = _indented_block(quality_block, "permissions:", 4)
+
+    assert permissions.splitlines() == [
+        "      contents: read",
+        "      id-token: write",
+    ]
+    assert "    uses: ./.github/workflows/code-quality.yml" in quality_block
+    assert "secrets:" not in quality_block
+    assert "packages: write" not in quality_block
+
+
 def test_remote_deploy_uses_lowercase_literal_secret_contract(
     deploy_harness: DeployHarness,
 ) -> None:

@@ -5,6 +5,9 @@ from pathlib import Path
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "code-quality.yml"
 )
+CODECOV_ACTION = (
+    "codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0"
+)
 
 
 def _indented_block(document: str, heading: str, indentation: int) -> str:
@@ -15,6 +18,22 @@ def _indented_block(document: str, heading: str, indentation: int) -> str:
 
     for line in lines[start:]:
         if line and not line.startswith(" " * (indentation + 1)):
+            break
+        block.append(line)
+
+    return "\n".join(block)
+
+
+def _named_step_block(document: str, step_name: str) -> str:
+    """Return one complete workflow step selected by its display name."""
+    lines = document.splitlines()
+    start = lines.index(f"      - name: {step_name}")
+    block = [lines[start]]
+
+    for line in lines[start + 1 :]:
+        if line.startswith("      - name: "):
+            break
+        if line and not line.startswith("        "):
             break
         block.append(line)
 
@@ -74,4 +93,31 @@ def test_quality_workflow_provisions_real_postgres() -> None:
     assert (
         "run: uv run pytest --cov=src --cov-report=xml "
         "--cov-report=term-missing" in test_job
+    )
+
+
+def test_quality_workflow_uploads_coverage_with_fail_closed_oidc() -> None:
+    """Authenticate one explicit report without hiding upload failures."""
+    document = WORKFLOW_PATH.read_text(encoding="utf-8")
+    test_job = _indented_block(document, "test:", 2)
+    permissions = _indented_block(test_job, "permissions:", 4)
+    codecov_step = _named_step_block(document, "Upload coverage to Codecov")
+
+    assert permissions.splitlines() == [
+        "      contents: read",
+        "      id-token: write",
+    ]
+    assert f"        uses: {CODECOV_ACTION}" in codecov_step
+    assert "          files: ./coverage.xml" in codecov_step
+    assert "          disable_search: true" in codecov_step
+    assert "          use_oidc: true" in codecov_step
+    assert "          fail_ci_if_error: true" in codecov_step
+    assert "CODECOV_TOKEN" not in document
+    assert "          token:" not in codecov_step
+    assert "          file:" not in codecov_step
+    assert "continue-on-error:" not in codecov_step
+    assert "fail_ci_if_error: false" not in document
+    assert document.count("codecov/codecov-action@") == 1
+    assert document.index("Run pytest with coverage") < document.index(
+        "Upload coverage to Codecov"
     )
