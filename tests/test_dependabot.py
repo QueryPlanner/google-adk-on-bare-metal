@@ -11,6 +11,7 @@ import yaml  # type: ignore[import-untyped]
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPOSITORY_ROOT / ".github" / "dependabot.yml"
 COMPOSE_PATH = REPOSITORY_ROOT / "compose.yaml"
+TRACE_GATEWAY_COMPOSE_PATH = REPOSITORY_ROOT / "compose.trace-gateway.yaml"
 DOCKERFILE_PATH = REPOSITORY_ROOT / "Dockerfile"
 PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
 LOCKFILE_PATH = REPOSITORY_ROOT / "uv.lock"
@@ -298,9 +299,15 @@ def test_configuration_targets_real_supported_manifests() -> None:
     assert re.findall(r"(?m)^\s*image:\s*(\S+)\s*$", compose) == ["${IMAGE:-agent}"]
     assert re.search(r"(?m)^\s*build:\s*\.\s*$", compose)
 
+    trace_gateway_compose = TRACE_GATEWAY_COMPOSE_PATH.read_text(encoding="utf-8")
+    assert (
+        "opentelemetry-collector-contrib:0.157.0@"
+        "sha256:f2f01157055a9b2aab9df7118e1f1c9abf345e99b23bc7a2bc791db374a7d0f6"
+    ) in trace_gateway_compose
+
     dependabot_document = CONFIG_PATH.read_text(encoding="utf-8")
     assert (
-        "Dormant while compose.yaml uses the unversioned ${IMAGE:-agent}"
+        "Track the optional pinned Collector overlay on the same weekly cadence."
         in dependabot_document
     )
     assert (

@@ -9,6 +9,8 @@ import json
 import os
 import re
 import warnings
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Literal, Self, cast
 from urllib.parse import (
     ParseResult,
@@ -22,6 +24,7 @@ from urllib.parse import (
 
 from pydantic import (
     Field,
+    PrivateAttr,
     SecretStr,
     ValidationError,
     field_validator,
@@ -31,17 +34,27 @@ from pydantic_settings import BaseSettings, DotEnvSettingsSource, SettingsConfig
 
 _DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
 _DEFAULT_OTLP_TRACE_TIMEOUT_SECONDS = 2.0
+_MAX_OTLP_CA_BYTES = 1024 * 1024
+_MAX_GATEWAY_TOKEN_BYTES = 4 * 1024
 _HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _HTTP_HEADER_VALUE = re.compile(r"^[\x20-\x7e]*$")
 _OTLP_HEADER_RAW_VALUE = re.compile(r"^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*$")
+_GATEWAY_BEARER_TOKEN = re.compile(r"^[0-9A-Za-z\-._~+/]+={0,}$")
 _DNS_LABEL = re.compile(r"^(?!-)[0-9A-Za-z-]{1,63}(?<!-)$")
 _PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _SUPPORTED_OTLP_SETTINGS = frozenset(
     {
+        "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
         "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
         "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
         "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    }
+)
+_OTLP_HTTP_CREDENTIAL_PROVIDER_SETTINGS = frozenset(
+    {
+        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
     }
 )
 _EXAMPLE_SECRET_VALUES = {
@@ -227,17 +240,25 @@ def _blank_optional_value(value: Any) -> Any:
     return value
 
 
-def _reject_non_trace_otlp_settings(keys: Any) -> None:
+def _reject_non_trace_otlp_settings(values: Mapping[Any, Any]) -> None:
     """Reject every unvalidated OTLP variable without echoing its key."""
-    for key in keys:
+    for key, value in values.items():
         normalized_key = str(key).upper()
+        if normalized_key in _OTLP_HTTP_CREDENTIAL_PROVIDER_SETTINGS:
+            raw_value = (
+                value.get_secret_value() if isinstance(value, SecretStr) else value
+            )
+            if isinstance(raw_value, str) and not raw_value.strip():
+                continue
+            msg = "Custom OTLP HTTP credential providers are not supported"
+            raise SettingsConfigurationError(msg)
         if (
             normalized_key.startswith("OTEL_EXPORTER_OTLP_")
             and normalized_key not in _SUPPORTED_OTLP_SETTINGS
         ):
             msg = (
                 "Unsupported OTLP exporter setting; use only the trace endpoint, "
-                "protocol, headers, and timeout settings"
+                "protocol, headers, certificate, and timeout settings"
             )
             raise SettingsConfigurationError(msg)
 
@@ -313,6 +334,56 @@ def _is_loopback_host(hostname: str) -> bool:
         return ipaddress.ip_address(normalized_hostname).is_loopback
     except ValueError:
         return False
+
+
+def _read_required_absolute_file(
+    path: str,
+    error_message: str,
+    *,
+    maximum_bytes: int,
+) -> bytes:
+    """Read one nonempty absolute file without disclosing its path."""
+    required_path = Path(path)
+    try:
+        if not required_path.is_absolute() or not required_path.is_file():
+            raise OSError
+        with required_path.open("rb") as required_file:
+            contents = required_file.read(maximum_bytes + 1)
+        if not contents or len(contents) > maximum_bytes:
+            raise OSError
+    except OSError:
+        raise SettingsConfigurationError(error_message) from None
+    return contents
+
+
+def _validate_otlp_certificate(certificate: str) -> None:
+    """Require one readable absolute CA file without echoing its path."""
+    _read_required_absolute_file(
+        certificate,
+        "The OTLP trace certificate must be a readable absolute file",
+        maximum_bytes=_MAX_OTLP_CA_BYTES,
+    )
+
+
+def _load_gateway_bearer_token(token_file: str) -> SecretStr:
+    """Load one strict bearer token from a Compose-mounted secret file."""
+    raw_token = _read_required_absolute_file(
+        token_file,
+        "The trace gateway token must be a readable absolute file",
+        maximum_bytes=_MAX_GATEWAY_TOKEN_BYTES,
+    )
+    try:
+        token = raw_token.decode("ascii")
+    except UnicodeDecodeError:
+        token = ""
+    if token.endswith("\r\n"):
+        token = token[:-2]
+    elif token.endswith("\n"):
+        token = token[:-1]
+    if _GATEWAY_BEARER_TOKEN.fullmatch(token) is None:
+        msg = "The trace gateway token file contains an invalid bearer token"
+        raise SettingsConfigurationError(msg)
+    return SecretStr(token)
 
 
 def _validate_otlp_headers(headers: str) -> None:
@@ -538,6 +609,8 @@ class DatabaseReadinessEnv(RedactedBaseSettings):
 class ObservabilityEnv(RedactedBaseSettings):
     """Settings needed before ADK constructs the FastAPI application."""
 
+    _gateway_bearer_token: SecretStr | None = PrivateAttr(default=None)
+
     telemetry_namespace: str = Field(
         default="local",
         alias="TELEMETRY_NAMESPACE",
@@ -578,6 +651,16 @@ class ObservabilityEnv(RedactedBaseSettings):
         alias="OTEL_EXPORTER_OTLP_TRACES_HEADERS",
         description="Explicit OTLP trace authentication headers",
     )
+    otel_exporter_otlp_traces_certificate: str | None = Field(
+        default=None,
+        alias="OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+        description="Absolute CA certificate path for an explicit HTTPS collector",
+    )
+    otel_gateway_bearer_token_file: str | None = Field(
+        default=None,
+        alias="OTEL_GATEWAY_BEARER_TOKEN_FILE",
+        description="Absolute bearer-token secret file for the local trace gateway",
+    )
     otel_exporter_otlp_traces_timeout: float | None = Field(
         default=None,
         alias="OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
@@ -605,6 +688,8 @@ class ObservabilityEnv(RedactedBaseSettings):
         "otel_exporter_otlp_traces_endpoint",
         "otel_exporter_otlp_traces_protocol",
         "otel_exporter_otlp_traces_headers",
+        "otel_exporter_otlp_traces_certificate",
+        "otel_gateway_bearer_token_file",
         "otel_exporter_otlp_traces_timeout",
         mode="before",
     )
@@ -646,10 +731,18 @@ class ObservabilityEnv(RedactedBaseSettings):
         explicit_endpoint = self.otel_exporter_otlp_traces_endpoint
         explicit_protocol = self.otel_exporter_otlp_traces_protocol
         explicit_headers = self.otel_exporter_otlp_traces_headers
+        explicit_certificate = self.otel_exporter_otlp_traces_certificate
+        gateway_token_file = self.otel_gateway_bearer_token_file
         explicit_timeout = self.otel_exporter_otlp_traces_timeout
         explicit_mode = any(
             value is not None
-            for value in (explicit_endpoint, explicit_protocol, explicit_headers)
+            for value in (
+                explicit_endpoint,
+                explicit_protocol,
+                explicit_headers,
+                explicit_certificate,
+                gateway_token_file,
+            )
         )
         if explicit_mode and langfuse_setting_configured:
             msg = "Langfuse and explicit OTLP trace settings are mutually exclusive"
@@ -661,9 +754,23 @@ class ObservabilityEnv(RedactedBaseSettings):
             raise SettingsConfigurationError(msg)
 
         if explicit_endpoint is None and (
-            explicit_protocol is not None or explicit_headers is not None
+            explicit_protocol is not None
+            or explicit_headers is not None
+            or explicit_certificate is not None
+            or gateway_token_file is not None
         ):
-            msg = "OTLP trace protocol and headers require a trace endpoint"
+            msg = (
+                "OTLP trace protocol, headers, certificate, and gateway token "
+                "require a trace endpoint"
+            )
+            raise SettingsConfigurationError(msg)
+        if explicit_headers is not None and gateway_token_file is not None:
+            msg = (
+                "Explicit OTLP headers and a trace gateway token are mutually exclusive"
+            )
+            raise SettingsConfigurationError(msg)
+        if gateway_token_file is not None and explicit_certificate is None:
+            msg = "A trace gateway token requires a custom CA certificate"
             raise SettingsConfigurationError(msg)
         if explicit_timeout is not None and not (
             explicit_endpoint is not None
@@ -689,8 +796,18 @@ class ObservabilityEnv(RedactedBaseSettings):
             ):
                 msg = "The OTLP trace endpoint must end exactly once in /v1/traces"
                 raise SettingsConfigurationError(msg)
+            if (
+                explicit_certificate is not None
+                and parsed_endpoint.scheme.casefold() != "https"
+            ):
+                msg = "An OTLP trace certificate requires an HTTPS endpoint"
+                raise SettingsConfigurationError(msg)
         if explicit_headers is not None:
             _validate_otlp_headers(explicit_headers.get_secret_value())
+        if explicit_certificate is not None:
+            _validate_otlp_certificate(explicit_certificate)
+        if gateway_token_file is not None:
+            self._gateway_bearer_token = _load_gateway_bearer_token(gateway_token_file)
         if public_key_configured and secret_key_configured:
             _parse_safe_http_endpoint(self.effective_langfuse_base_url)
 
@@ -708,6 +825,11 @@ class ObservabilityEnv(RedactedBaseSettings):
             self.otel_exporter_otlp_traces_timeout
             or _DEFAULT_OTLP_TRACE_TIMEOUT_SECONDS
         )
+
+    @property
+    def gateway_bearer_token(self) -> SecretStr | None:
+        """Return the validated local gateway token without exposing it."""
+        return self._gateway_bearer_token
 
 
 class ServerEnv(RedactedBaseSettings):

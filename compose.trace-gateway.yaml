@@ -1,0 +1,98 @@
+services:
+  agent:
+    env_file: !override
+      - ${OTEL_GATEWAY_AGENT_ENV_FILE:?Set the gateway-only agent env file}
+    environment:
+      LANGFUSE_BASE_URL: ""
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE: /run/secrets/otel_gateway_ca
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: https://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_TRACES_HEADERS: ""
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: http/protobuf
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: "2"
+      OTEL_GATEWAY_BEARER_TOKEN_FILE: /run/secrets/otel_gateway_receiver_token
+      OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER: ""
+      OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER: ""
+    group_add:
+      - ${OTEL_GATEWAY_SECRET_GID:?Set the dedicated gateway secret GID}
+    secrets:
+      - source: otel_gateway_ca
+        target: otel_gateway_ca
+      - source: otel_gateway_receiver_token
+        target: otel_gateway_receiver_token
+    networks:
+      - default
+      - otel_gateway_telemetry
+
+  otel-collector:
+    image: >-
+      ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.157.0@sha256:f2f01157055a9b2aab9df7118e1f1c9abf345e99b23bc7a2bc791db374a7d0f6
+    command:
+      - --config=file:/etc/otelcol-contrib/config.yaml
+    env_file:
+      - ${OTEL_GATEWAY_COLLECTOR_ENV_FILE:?Set the Collector-only env file}
+    configs:
+      - source: otel_gateway_config
+        target: /etc/otelcol-contrib/config.yaml
+    secrets:
+      - source: otel_gateway_receiver_token
+        target: otel_gateway_receiver_token
+      - source: otel_gateway_server_certificate
+        target: otel_gateway_server_certificate
+      - source: otel_gateway_server_key
+        target: otel_gateway_server_key
+      - source: otel_gateway_langfuse_token
+        target: otel_gateway_langfuse_token
+    ports:
+      - target: 13133
+        published: "${OTEL_GATEWAY_HEALTH_PORT:-13133}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 8888
+        published: "${OTEL_GATEWAY_METRICS_PORT:-8888}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    networks:
+      - otel_gateway_telemetry
+      - otel_gateway_egress
+    group_add:
+      - ${OTEL_GATEWAY_SECRET_GID:?Set the dedicated gateway secret GID}
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 100
+    stop_grace_period: 10s
+    restart: always
+
+configs:
+  otel_gateway_config:
+    file: ./deploy/otel-collector/config.yaml
+
+secrets:
+  otel_gateway_ca:
+    file: ${OTEL_GATEWAY_CA_FILE:?Set the receiver CA file}
+  otel_gateway_receiver_token:
+    file: ${OTEL_GATEWAY_RECEIVER_TOKEN_FILE:?Set the receiver token file}
+  otel_gateway_server_certificate:
+    file: >-
+      ${OTEL_GATEWAY_SERVER_CERTIFICATE_FILE:?Set the receiver certificate file}
+  otel_gateway_server_key:
+    file: ${OTEL_GATEWAY_SERVER_KEY_FILE:?Set the receiver key file}
+  otel_gateway_langfuse_token:
+    file: ${OTEL_GATEWAY_LANGFUSE_TOKEN_FILE:?Set the Langfuse token file}
+
+networks:
+  otel_gateway_telemetry:
+    internal: true
+  otel_gateway_egress:
+    internal: false

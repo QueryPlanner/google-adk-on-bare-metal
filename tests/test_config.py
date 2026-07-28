@@ -550,6 +550,9 @@ class TestObservabilityEnv:
         assert env.otel_exporter_otlp_traces_endpoint is None
         assert env.otel_exporter_otlp_traces_protocol is None
         assert env.otel_exporter_otlp_traces_headers is None
+        assert env.otel_exporter_otlp_traces_certificate is None
+        assert env.otel_gateway_bearer_token_file is None
+        assert env.gateway_bearer_token is None
         assert env.otel_exporter_otlp_traces_timeout is None
         assert env.effective_otel_exporter_otlp_traces_timeout == 2.0
         assert env.otel_capture_message_content is False
@@ -608,9 +611,14 @@ class TestObservabilityEnv:
         assert env.telemetry_namespace == "constructor"
         assert env.service_revision == "process"
 
-    def test_explicit_trace_values_are_normalized_and_redacted(self) -> None:
+    def test_explicit_trace_values_are_normalized_and_redacted(
+        self,
+        tmp_path: Path,
+    ) -> None:
         """Accept the one supported explicit HTTP/protobuf configuration."""
         header = "Authorization=Bearer%20header-secret-canary"
+        certificate = tmp_path / "collector-ca.pem"
+        certificate.write_text("synthetic-ca\n", encoding="utf-8")
         env = ObservabilityEnv.model_validate(
             {
                 "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
@@ -618,6 +626,7 @@ class TestObservabilityEnv:
                 ),
                 "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "HTTP/PROTOBUF",
                 "OTEL_EXPORTER_OTLP_TRACES_HEADERS": header,
+                "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
                 "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "1.5",
                 "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
             }
@@ -629,10 +638,39 @@ class TestObservabilityEnv:
         assert env.otel_exporter_otlp_traces_protocol == "http/protobuf"
         assert env.otel_exporter_otlp_traces_headers is not None
         assert env.otel_exporter_otlp_traces_headers.get_secret_value() == header
+        assert env.otel_exporter_otlp_traces_certificate == str(certificate)
         assert env.otel_exporter_otlp_traces_timeout == 1.5
         assert env.effective_otel_exporter_otlp_traces_timeout == 1.5
         assert header not in repr(env)
         assert env.otel_capture_message_content is True
+
+    @pytest.mark.parametrize("line_ending", ["", "\n", "\r\n"])
+    def test_gateway_token_file_is_loaded_and_redacted(
+        self,
+        line_ending: str,
+        tmp_path: Path,
+    ) -> None:
+        """Load local receiver auth from a mounted secret without retaining a path."""
+        certificate = tmp_path / "collector-ca.pem"
+        certificate.write_text("synthetic-ca\n", encoding="utf-8")
+        token = "gateway-token-secret-canary"  # noqa: S105
+        token_file = tmp_path / "gateway-token"
+        token_file.write_text(f"{token}{line_ending}", encoding="ascii")
+
+        env = ObservabilityEnv.model_validate(
+            {
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                    "https://otel-collector:4318/v1/traces"
+                ),
+                "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
+                "OTEL_GATEWAY_BEARER_TOKEN_FILE": str(token_file),
+            }
+        )
+
+        assert env.otel_gateway_bearer_token_file == str(token_file)
+        assert env.gateway_bearer_token is not None
+        assert env.gateway_bearer_token.get_secret_value() == token
+        assert token not in repr(env)
 
     def test_blank_optional_values_remain_unconfigured(self) -> None:
         """Treat selected blank optional values as deliberate omissions."""
@@ -642,6 +680,8 @@ class TestObservabilityEnv:
                 "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "",
                 "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "\t",
                 "OTEL_EXPORTER_OTLP_TRACES_HEADERS": " ",
+                "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": "",
+                "OTEL_GATEWAY_BEARER_TOKEN_FILE": "\t",
                 "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "",
             }
         )
@@ -650,6 +690,9 @@ class TestObservabilityEnv:
         assert env.otel_exporter_otlp_traces_endpoint is None
         assert env.otel_exporter_otlp_traces_protocol is None
         assert env.otel_exporter_otlp_traces_headers is None
+        assert env.otel_exporter_otlp_traces_certificate is None
+        assert env.otel_gateway_bearer_token_file is None
+        assert env.gateway_bearer_token is None
         assert env.otel_exporter_otlp_traces_timeout is None
 
     @pytest.mark.parametrize(
@@ -712,6 +755,14 @@ class TestObservabilityEnv:
         [
             ("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf"),
             ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-test=value"),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+                "/run/secrets/otel_gateway_ca",
+            ),
+            (
+                "OTEL_GATEWAY_BEARER_TOKEN_FILE",
+                "/run/secrets/otel_gateway_token",
+            ),
         ],
     )
     def test_trace_options_without_endpoint_are_rejected(
@@ -846,6 +897,160 @@ class TestObservabilityEnv:
 
         assert env.otel_exporter_otlp_traces_endpoint == endpoint
 
+    def test_trace_certificate_requires_https(self, tmp_path: Path) -> None:
+        """Never apply custom CA trust to a plaintext collector."""
+        certificate = tmp_path / "collector-ca.pem"
+        certificate.write_text("synthetic-ca\n", encoding="utf-8")
+
+        with pytest.raises(
+            SettingsConfigurationError,
+            match="certificate requires an HTTPS endpoint",
+        ):
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "http://127.0.0.1:4318/v1/traces"
+                    ),
+                    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
+                }
+            )
+
+    def test_gateway_token_requires_a_custom_ca(self, tmp_path: Path) -> None:
+        """Bind local bearer authentication to the chosen private-TLS transport."""
+        token_file = tmp_path / "gateway-token"
+        token_file.write_text("gateway-token", encoding="ascii")
+
+        with pytest.raises(
+            SettingsConfigurationError,
+            match="requires a custom CA certificate",
+        ):
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "https://otel-collector:4318/v1/traces"
+                    ),
+                    "OTEL_GATEWAY_BEARER_TOKEN_FILE": str(token_file),
+                }
+            )
+
+    def test_gateway_token_and_explicit_headers_are_mutually_exclusive(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Prevent two authentication sources from competing."""
+        certificate = tmp_path / "collector-ca.pem"
+        certificate.write_text("synthetic-ca\n", encoding="utf-8")
+        token_file = tmp_path / "gateway-token"
+        token_file.write_text("gateway-token", encoding="ascii")
+
+        with pytest.raises(
+            SettingsConfigurationError,
+            match="headers and a trace gateway token are mutually exclusive",
+        ):
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "https://otel-collector:4318/v1/traces"
+                    ),
+                    "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-test=value",
+                    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
+                    "OTEL_GATEWAY_BEARER_TOKEN_FILE": str(token_file),
+                }
+            )
+
+    @pytest.mark.parametrize(
+        "certificate_kind",
+        ["relative", "missing", "directory", "empty", "oversized"],
+    )
+    def test_trace_certificate_must_be_a_readable_absolute_file(
+        self,
+        certificate_kind: str,
+        tmp_path: Path,
+    ) -> None:
+        """Fail before binding without disclosing an unusable CA path."""
+        if certificate_kind == "relative":
+            certificate = Path("relative-collector-ca.pem")
+            certificate.write_text("synthetic-ca\n", encoding="utf-8")
+        else:
+            certificate = tmp_path / f"{certificate_kind}-collector-ca.pem"
+            if certificate_kind == "directory":
+                certificate.mkdir()
+            elif certificate_kind == "empty":
+                certificate.touch()
+            elif certificate_kind == "oversized":
+                certificate.write_bytes(b"x" * ((1024 * 1024) + 1))
+
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "https://collector.example/v1/traces"
+                    ),
+                    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
+                }
+            )
+
+        formatted_error = "".join(traceback.format_exception(exc_info.value))
+        assert "readable absolute file" in str(exc_info.value)
+        assert str(certificate) not in formatted_error
+
+    @pytest.mark.parametrize(
+        "credential_case",
+        [
+            "relative",
+            "missing",
+            "directory",
+            "empty",
+            "non-ascii",
+            "whitespace",
+            "multiple-lines",
+            "oversized",
+        ],
+    )
+    def test_gateway_token_file_must_contain_one_strict_bearer_token(
+        self,
+        credential_case: str,
+        tmp_path: Path,
+    ) -> None:
+        """Reject unusable or header-ambiguous local credentials without disclosure."""
+        certificate = tmp_path / "collector-ca.pem"
+        certificate.write_text("synthetic-ca\n", encoding="utf-8")
+        if credential_case == "relative":
+            token_file = Path("relative-gateway-token")
+            token_file.write_text("gateway-token", encoding="ascii")
+        else:
+            token_file = tmp_path / f"{credential_case}-gateway-token"
+            if credential_case == "directory":
+                token_file.mkdir()
+            elif credential_case == "empty":
+                token_file.touch()
+            elif credential_case == "non-ascii":
+                token_file.write_text("tökén", encoding="utf-8")
+            elif credential_case == "whitespace":
+                token_file.write_text("gateway token\n", encoding="ascii")
+            elif credential_case == "multiple-lines":
+                token_file.write_text(
+                    "gateway-token\nsecond-token\n",
+                    encoding="ascii",
+                )
+            elif credential_case == "oversized":
+                token_file.write_bytes(b"x" * ((4 * 1024) + 1))
+
+        with pytest.raises(SettingsConfigurationError) as exc_info:
+            ObservabilityEnv.model_validate(
+                {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": (
+                        "https://otel-collector:4318/v1/traces"
+                    ),
+                    "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": str(certificate),
+                    "OTEL_GATEWAY_BEARER_TOKEN_FILE": str(token_file),
+                }
+            )
+
+        formatted_error = "".join(traceback.format_exception(exc_info.value))
+        assert "trace gateway token" in str(exc_info.value)
+        assert str(token_file) not in formatted_error
+
     @pytest.mark.parametrize(
         "headers",
         [
@@ -916,7 +1121,19 @@ class TestObservabilityEnv:
         [
             ("constructor", "OTEL_EXPORTER_OTLP_ENDPOINT"),
             ("process", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"),
-            ("dotenv", "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"),
+            ("dotenv", "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION"),
+            (
+                "constructor",
+                "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+            ),
+            (
+                "process",
+                "OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
+            ),
+            (
+                "dotenv",
+                "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+            ),
         ],
     )
     def test_unvalidated_otlp_variables_are_rejected_from_every_source(
@@ -926,7 +1143,7 @@ class TestObservabilityEnv:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """Allowlist only the four validated trace exporter variables."""
+        """Allowlist only the five validated trace exporter variables."""
         canary = "unsupported-setting-canary"
         constructor_values: dict[str, str] = {}
         if source == "constructor":
@@ -945,6 +1162,24 @@ class TestObservabilityEnv:
         formatted_error = "".join(traceback.format_exception(exc_info.value))
         assert unsupported_name not in formatted_error
         assert canary not in formatted_error
+
+    def test_blank_otlp_http_credential_providers_are_inert(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Allow the gateway overlay to clear hostile provider hooks."""
+        monkeypatch.setenv(
+            "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+            "",
+        )
+        monkeypatch.setenv(
+            "OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
+            " ",
+        )
+
+        env = ObservabilityEnv()
+
+        assert env.otel_exporter_otlp_traces_endpoint is None
 
     @pytest.mark.parametrize("_source_override", ["_env_file", "_secrets_dir"])
     def test_per_instance_settings_source_overrides_are_rejected(

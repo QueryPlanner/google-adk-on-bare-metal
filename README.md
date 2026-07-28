@@ -12,7 +12,7 @@ We believe you should own your agents. This template is designed to strip away t
 - 🔄 **CI/CD Included**: GitHub Actions workflow builds multi-arch images (AMD64/ARM64) and pushes to GHCR automatically.
 - 🔭 **Trace Observability**: ADK-owned OpenTelemetry tracing with structured
   message and tool payloads elided by default, plus optional trace-only
-  OTLP/HTTP export.
+  OTLP/HTTP export and an opt-in VM redaction gateway.
 - 🚀 **Modern Stack**: Python 3.13, `uv`, `fastapi`, `asyncpg`.
 - 💾 **VM Persistence**: Postgres-backed sessions and local artifacts retained
   across normal process and container recreation.
@@ -160,9 +160,23 @@ Treat the collector as sensitive telemetry and keep secrets out of exception
 text. Set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` only as an
 explicit privacy-sensitive opt-in.
 
+Operators with an outbound data-boundary requirement can add the optional
+`compose.trace-gateway.yaml` overlay. It uses private-network TLS and bearer
+authentication, keeps Langfuse credentials out of the agent container, and
+removes exception events, status messages, descriptions, identifier attributes,
+custom attributes, unsafe span names, and non-integer token fields before export.
+Resource entity references and schema URLs are also removed; trace/span IDs
+remain as structural fields. It adds a second process and a 256 MiB memory
+limit, and it does not prevent raw
+telemetry from existing inside the process or transiently on the VM. The
+gateway requires Docker Compose 2.24.4 or newer and one dedicated host group
+for its bind-mounted secrets. It minimizes standard SDK telemetry; it is not
+DLP against application code deliberately encoding data into retained IDs,
+timestamps, or integer fields.
+
 See the [observability guide](docs/base-infra/observability.md) for the two
 atomic configuration modes, endpoint restrictions, graceful-flush boundary,
-and migration from legacy generic OTLP variables.
+gateway workflow, and migration from legacy generic OTLP variables.
 
 ## Documentation
 

@@ -59,7 +59,7 @@ updates:
     commit-message:
       prefix: "build(deps)"
 
-  # Dormant while compose.yaml uses the unversioned ${IMAGE:-agent} reference.
+  # Track the optional pinned Collector overlay on the same weekly cadence.
   - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:

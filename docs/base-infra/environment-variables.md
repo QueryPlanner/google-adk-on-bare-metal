@@ -217,6 +217,20 @@ credentials, and mixed modes fail before the server binds.
 - **Value:** Comma-separated, percent-encoded `name=value` pairs
 - **Purpose:** Supplies trace-collector authentication or routing headers
 
+**OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE**
+- **When:** Optional; explicit HTTPS trace mode only
+- **Value:** Absolute path to one nonempty, readable CA certificate file of at
+  most 1 MiB
+- **Purpose:** Adds trust for a private-TLS Collector without enabling a client
+  certificate or private key
+
+**OTEL_GATEWAY_BEARER_TOKEN_FILE**
+- **When:** Optional; only with an explicit HTTPS endpoint and custom CA
+- **Value:** Absolute path to a nonempty bearer-token file of at most 4 KiB
+- **Purpose:** Loads private-network receiver authentication from a mounted
+  secret without putting the token in Compose configuration or container
+  metadata; the process derives the trace `Authorization` header at startup
+
 **OTEL_EXPORTER_OTLP_TRACES_TIMEOUT**
 - **When:** Optional; requires either complete Langfuse or explicit trace mode
 - **Effective default during remote export:** `2` seconds
@@ -237,11 +251,26 @@ stop grace period.
 
 `grpc` is not supported. This template configures no OTLP metric or log
 exporter, HTTP server instrumentation, Cloud Trace or Cloud Logging exporter,
-or bundled OpenTelemetry Collector.
+or Collector in the base Compose deployment.
 
-The endpoint, protocol, headers, and timeout above are the only accepted
+The endpoint, protocol, headers, certificate, and timeout above are the only
+accepted
 `OTEL_EXPORTER_OTLP_*` settings. Metric-specific, log-specific, and other
 exporter settings are rejected before the server binds.
+
+`OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER` and
+`OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER` are also rejected
+when nonblank. Custom exporter sessions can override request routing and are
+outside this template's transport contract. The gateway overlay explicitly
+clears both hooks.
+
+`OTEL_GATEWAY_BEARER_TOKEN_FILE` is template-specific rather than an
+OpenTelemetry SDK variable. It is mutually exclusive with explicit trace
+headers, requires the custom CA setting, accepts only strict ASCII bearer-token
+syntax with at most one terminal line ending, and never prints the path or token
+in validation failures. The
+`compose.trace-gateway.yaml` overlay mounts the same secret into the application
+and Collector receiver.
 
 Legacy generic `OTEL_EXPORTER_OTLP_ENDPOINT`,
 `OTEL_EXPORTER_OTLP_PROTOCOL`, and `OTEL_EXPORTER_OTLP_HEADERS` values are
