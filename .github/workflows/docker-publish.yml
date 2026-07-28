@@ -141,7 +141,7 @@ jobs:
           esac
 
       - name: Deploy to Server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           DEPLOY_SHA: ${{ github.sha }}
           IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
