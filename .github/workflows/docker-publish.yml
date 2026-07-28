@@ -30,6 +30,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build-push.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -81,6 +83,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Record immutable image reference
+        env:
+          IMAGE_DIGEST: ${{ steps.build-push.outputs.digest }}
+        run: |
+          printf '### Immutable image\n\n`%s/%s@%s`\n' \
+            "$REGISTRY" "$IMAGE_NAME" "$IMAGE_DIGEST" \
+            >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     needs: build
     if: >-
@@ -88,30 +98,151 @@ jobs:
       github.ref == 'refs/heads/main' &&
       inputs.deploy
     runs-on: ubuntu-latest
+    concurrency:
+      group: production-deployment
+      cancel-in-progress: false
+      queue: max
     steps:
+      - name: Validate deployment provenance
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          set -eu
+
+          if [ "${#DEPLOY_SHA}" -ne 40 ]; then
+            echo "ERROR: Invalid deployment commit."
+            exit 1
+          fi
+          case "$DEPLOY_SHA" in
+            *[!0123456789abcdef]*)
+              echo "ERROR: Invalid deployment commit."
+              exit 1
+              ;;
+          esac
+
+          case "$IMAGE_DIGEST" in
+            sha256:*) ;;
+            *)
+              echo "ERROR: Invalid image digest."
+              exit 1
+              ;;
+          esac
+          DIGEST_HEX=${IMAGE_DIGEST#sha256:}
+          if [ "${#DIGEST_HEX}" -ne 64 ]; then
+            echo "ERROR: Invalid image digest."
+            exit 1
+          fi
+          case "$DIGEST_HEX" in
+            *[!0123456789abcdef]*)
+              echo "ERROR: Invalid image digest."
+              exit 1
+              ;;
+          esac
+
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA,IMAGE_DIGEST
           script: |
             set -eu
+
+            if [ "${#DEPLOY_SHA}" -ne 40 ]; then
+              echo "ERROR: Invalid deployment commit."
+              exit 1
+            fi
+            case "$DEPLOY_SHA" in
+              *[!0123456789abcdef]*)
+                echo "ERROR: Invalid deployment commit."
+                exit 1
+                ;;
+            esac
+
+            case "$IMAGE_DIGEST" in
+              sha256:*) ;;
+              *)
+                echo "ERROR: Invalid image digest."
+                exit 1
+                ;;
+            esac
+            DIGEST_HEX=${IMAGE_DIGEST#sha256:}
+            if [ "${#DIGEST_HEX}" -ne 64 ]; then
+              echo "ERROR: Invalid image digest."
+              exit 1
+            fi
+            case "$DIGEST_HEX" in
+              *[!0123456789abcdef]*)
+                echo "ERROR: Invalid image digest."
+                exit 1
+                ;;
+            esac
 
             # 1. Set dynamic project directory based on repository name
             PROJECT_NAME="${{ github.event.repository.name }}"
             PROJECT_DIR="$HOME/$PROJECT_NAME"
-            IMAGE_NAME="$(printf '%s' "ghcr.io/${{ github.repository }}:main" | tr '[:upper:]' '[:lower:]')"
+            EXPECTED_ORIGIN="https://github.com/${{ github.repository }}"
+            IMAGE_REPOSITORY="$(
+              printf '%s' "ghcr.io/${{ github.repository }}" \
+                | tr '[:upper:]' '[:lower:]'
+            )"
+            IMAGE_NAME="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+            DEPLOY_PROJECT="$(
+              printf 'adk-%s' "$PROJECT_NAME" | tr '[:upper:].' '[:lower:]-'
+            )"
 
             # 2. Ensure project directory exists
-            if [ ! -d "$PROJECT_DIR" ]; then
+            if [ -e "$PROJECT_DIR" ] && [ ! -d "$PROJECT_DIR/.git" ]; then
+              echo "ERROR: Project path exists without a Git checkout."
+              exit 1
+            fi
+            if [ ! -d "$PROJECT_DIR/.git" ]; then
               echo "Project directory not found. Cloning..."
               git clone https://github.com/${{ github.repository }} "$PROJECT_DIR"
             fi
 
-            # 3. Navigate and Update Code
+            # 3. Navigate to the exact source revision without discarding changes
             cd "$PROJECT_DIR"
-            git pull
+            ACTUAL_ORIGIN="$(git remote get-url origin)"
+            case "$ACTUAL_ORIGIN" in
+              "$EXPECTED_ORIGIN"|"$EXPECTED_ORIGIN.git") ;;
+              *)
+                echo "ERROR: Existing checkout has an unexpected origin."
+                exit 1
+                ;;
+            esac
+            if ! git diff --quiet --; then
+              echo "ERROR: Tracked worktree changes block deployment."
+              exit 1
+            fi
+            if ! git diff --cached --quiet --; then
+              echo "ERROR: Staged changes block deployment."
+              exit 1
+            fi
+            git fetch --no-tags origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            CHECKED_OUT_SHA="$(git rev-parse --verify HEAD)"
+            if [ "$CHECKED_OUT_SHA" != "$DEPLOY_SHA" ]; then
+              echo "ERROR: Checked-out commit does not match deployment commit."
+              exit 1
+            fi
+            if ! git diff --quiet --; then
+              echo "ERROR: Checkout left tracked worktree changes."
+              exit 1
+            fi
+            if ! git diff --cached --quiet --; then
+              echo "ERROR: Checkout left staged changes."
+              exit 1
+            fi
+            if ! git ls-files --error-unmatch -- compose.yaml >/dev/null 2>&1; then
+              echo "ERROR: Deployment commit does not track compose.yaml."
+              exit 1
+            fi
 
             # 4. Inject Secrets into .env (Automated Configuration)
             echo "Generating .env file from GitHub Secrets..."
@@ -131,6 +262,51 @@ jobs:
 
             # 5. Deploy with dynamic image
             export IMAGE="$IMAGE_NAME"
-            docker compose pull
-            docker compose up --no-build --wait --wait-timeout 180
+            CONFIGURED_IMAGE="$(
+              docker compose --project-name "$DEPLOY_PROJECT" \
+                --env-file .env -f compose.yaml config --images
+            )"
+            if [ "$CONFIGURED_IMAGE" != "$IMAGE_NAME" ]; then
+              echo "ERROR: Compose image does not match the deployment digest."
+              exit 1
+            fi
+            docker compose --project-name "$DEPLOY_PROJECT" \
+              --env-file .env -f compose.yaml pull agent
+            docker compose --project-name "$DEPLOY_PROJECT" \
+              --env-file .env -f compose.yaml \
+              up --no-build --wait --wait-timeout 180 agent
+
+            CONTAINER_ID="$(
+              docker compose --project-name "$DEPLOY_PROJECT" \
+                --env-file .env -f compose.yaml ps --quiet agent
+            )"
+            if [ -z "$CONTAINER_ID" ]; then
+              echo "ERROR: Compose did not return the agent container."
+              exit 1
+            fi
+            RUNNING_IMAGE="$(
+              docker inspect --type container \
+                --format '{{.Config.Image}}' "$CONTAINER_ID"
+            )"
+            if [ "$RUNNING_IMAGE" != "$IMAGE_NAME" ]; then
+              echo "ERROR: Running image does not match the deployment digest."
+              exit 1
+            fi
+            CONTAINER_IMAGE_ID="$(
+              docker inspect --type container --format '{{.Image}}' "$CONTAINER_ID"
+            )"
+            if [ -z "$CONTAINER_IMAGE_ID" ]; then
+              echo "ERROR: Running container does not expose an image ID."
+              exit 1
+            fi
+            RUNNING_REVISION="$(
+              docker image inspect \
+                --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+                "$CONTAINER_IMAGE_ID"
+            )"
+            if [ "$RUNNING_REVISION" != "$DEPLOY_SHA" ]; then
+              echo "ERROR: Running image revision does not match the deployment commit."
+              exit 1
+            fi
+
             docker image prune -f

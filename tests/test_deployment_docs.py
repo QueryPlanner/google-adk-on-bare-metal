@@ -8,7 +8,10 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 README_PATH = REPOSITORY_ROOT / "README.md"
 DEPLOYMENT_GUIDE_PATH = REPOSITORY_ROOT / "docs" / "DEPLOYMENT.md"
-IMAGE_EXPORT = 'export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>:main"'
+IMAGE_EXPORT = (
+    'export IMAGE="ghcr.io/<your-org-or-username>/'
+    '<your-repository>@sha256:<64-lowercase-hex>"'
+)
 PREBUILT_DEPLOY_COMMAND = (
     "docker compose pull && docker compose up --no-build --wait --wait-timeout 180"
 )
@@ -47,6 +50,8 @@ def test_prebuilt_image_workflow_uses_configurable_compose_contract(
     assert "cloned repository" in document
     assert "`.env`" in document
     assert "lowercase" in document
+    assert "digest" in document
+    assert "immutable" in document
     assert "session-scoped" in document
     assert LOCAL_BUILD_COMMAND in document
 
@@ -61,6 +66,21 @@ def test_guides_remove_stale_registry_and_compose_edit_instructions() -> None:
     assert "docker pull " not in combined
     assert "update your `compose.yaml`" not in deployment_guide.casefold()
     assert "image: ghcr.io/" not in deployment_guide.casefold()
+
+
+def test_guides_document_exact_automated_deployment_provenance() -> None:
+    """Explain the commit-and-digest pair without promising mutable tags."""
+    readme = " ".join(README_PATH.read_text(encoding="utf-8").split())
+    deployment_guide = " ".join(
+        DEPLOYMENT_GUIDE_PATH.read_text(encoding="utf-8").split()
+    )
+
+    for document in (readme, deployment_guide):
+        assert "workflow commit SHA" in document
+        assert "build digest" in document
+        assert "detached mode" in document
+        assert "tracked `compose.yaml`" in document
+        assert "OCI revision" in document
 
 
 def test_private_registry_login_uses_least_privilege_stdin_contract() -> None:

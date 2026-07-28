@@ -45,6 +45,16 @@ This repository includes a GitHub Actions workflow that automatically:
 2.  **Validates** code quality via `ruff`, `mypy`, and `pytest` before building.
 3.  **Caches** build layers using GitHub Actions cache (`type=gha`) for ultra-fast rebuilds.
 4.  **Pushes** the image to **GitHub Container Registry (GHCR)**.
+5.  **Deploys only on explicit manual confirmation** from `main`, using the
+    exact workflow commit SHA and OCI digest produced by that run.
+
+The automated VM deployment treats `(workflow commit SHA, build digest)` as one
+provenance pair. Before changing the VM it validates both values, then checks
+out the commit in detached mode without resetting or cleaning operator files.
+It invokes only the tracked `compose.yaml` under an explicit project name and
+verifies both the running digest-qualified image reference and the image's OCI
+revision label. The immutable image reference is also written to the Docker
+Publish workflow summary.
 
 ### Using GHCR Images
 
@@ -62,12 +72,14 @@ printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --passw
 ```
 
 Replace both placeholders below with the lowercase GitHub owner and repository
-whose workflow published the image. `IMAGE` selects the existing
-`${IMAGE:-agent}` Compose image contract; do not edit `compose.yaml`. The export
-is session-scoped, so repeat it in each new deployment shell.
+whose workflow published the image. Replace the digest placeholder with the
+lowercase digest from the Docker Publish workflow summary. `IMAGE` selects the
+existing `${IMAGE:-agent}` Compose image contract; do not edit `compose.yaml`.
+Tags such as `main` can move, while a digest selects one immutable OCI image.
+The export is session-scoped, so repeat it in each new deployment shell.
 
 ```bash
-export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>:main"
+export IMAGE="ghcr.io/<your-org-or-username>/<your-repository>@sha256:<64-lowercase-hex>"
 docker compose pull && docker compose up --no-build --wait --wait-timeout 180
 ```
 
