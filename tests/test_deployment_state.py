@@ -149,18 +149,33 @@ def _write_document(path: Path, document: dict[str, object]) -> None:
     _write_private(path, state_module._canonical_json(document))
 
 
-def _append_second_record(store: DeploymentStateStore) -> dict[str, object]:
-    first_payload = _journal_path(store).read_bytes()
-    first = _read_document(_journal_path(store))
-    second = {
+def _append_later_adoption(store: DeploymentStateStore) -> None:
+    previous_payload = _journal_path(store).read_bytes()
+    deployment_id = "adopt-later-00000002"
+    environment_snapshot = f"environments/{deployment_id}.env"
+    _write_private(store.path / environment_snapshot, ENVIRONMENT_BYTES)
+    state = {
+        "schema_version": 1,
+        "deployment_id": deployment_id,
+        "recorded_at": RECORDED_AT,
+        "compose_project": "adk-template",
+        "compose_service": "agent",
+        "source_revision": REVISION,
+        "image_reference": IMAGE_REFERENCE,
+        "image_id": IMAGE_ID,
+        "oci_revision": OCI_REVISION,
+        "environment_snapshot": environment_snapshot,
+        "environment_sha256": hashlib.sha256(ENVIRONMENT_BYTES).hexdigest(),
+        "adopted": True,
+    }
+    later = {
         "schema_version": 1,
         "sequence": 2,
-        "previous_sha256": hashlib.sha256(first_payload).hexdigest(),
+        "previous_sha256": hashlib.sha256(previous_payload).hexdigest(),
         "event": "adopted",
-        "state": first["state"],
+        "state": state,
     }
-    _write_document(_journal_path(store, 2), second)
-    return second
+    _write_document(_journal_path(store, 2), later)
 
 
 def test_adoption_round_trips_private_crash_consistent_state(
@@ -534,13 +549,18 @@ def test_stale_current_is_advanced_to_latest_valid_journal(tmp_path: Path) -> No
     """Recover a committed journal record that became durable before current."""
     store = DeploymentStateStore(tmp_path / "state")
     _adopt(store, _environment(tmp_path))
-    second = _append_second_record(store)
+    baseline_bytes = store.current_path.read_bytes()
+    with store.transaction() as transaction:
+        pending = _begin_promotion(transaction, _promotion_environment(tmp_path))
+        promoted = transaction.commit_promotion(
+            pending.transaction_id,
+            persistent_volumes=PERSISTENT_VOLUMES,
+        )
+    _write_private(store.current_path, baseline_bytes)
 
     recovered = store.read_current()
 
-    assert recovered is not None
-    assert recovered.journal_sequence == 2
-    assert recovered.state.as_document() == second["state"]
+    assert recovered == promoted
     assert len(store.read_journal()) == 2
 
 
@@ -712,6 +732,58 @@ def test_corrupt_journal_record_fails_closed(
 
     with pytest.raises(DeploymentStateError, match=message):
         store.read_journal()
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["read-current", "read-journal", "transaction"],
+)
+def test_noninitial_schema_v1_adoption_fails_closed(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    """Reject a validly encoded adoption that attempts to reset journal history."""
+    store = DeploymentStateStore(tmp_path / operation / "state")
+    _adopt(store, _environment(tmp_path))
+    _append_later_adoption(store)
+    current_bytes = store.current_path.read_bytes()
+
+    with pytest.raises(
+        DeploymentStateError,
+        match="deployment journal adoption is not initial",
+    ) as error:
+        if operation == "read-current":
+            store.read_current()
+        elif operation == "read-journal":
+            store.read_journal()
+        else:
+            with store.transaction():
+                pytest.fail("noninitial adoption opened a transaction")
+
+    assert str(error.value) == "deployment journal adoption is not initial"
+    assert store.current_path.read_bytes() == current_bytes
+
+
+def test_adoption_after_empty_baseline_terminal_fails_closed(tmp_path: Path) -> None:
+    """Reject later adoption even when no earlier event established current state."""
+    store = DeploymentStateStore(tmp_path / "state")
+    with store.transaction() as transaction:
+        pending = _begin_promotion(
+            transaction,
+            _promotion_environment(tmp_path),
+            persistent_volumes=(),
+        )
+        transaction.record_abort(
+            pending.transaction_id,
+            persistent_volumes=(),
+        )
+    assert store.read_current() is None
+    _append_later_adoption(store)
+
+    with pytest.raises(DeploymentStateError) as error:
+        store.read_journal()
+
+    assert str(error.value) == "deployment journal adoption is not initial"
 
 
 def test_environment_snapshot_tampering_fails_closed(tmp_path: Path) -> None:
@@ -2829,7 +2901,22 @@ def test_pending_baselines_must_match_replayed_state(
     _adopt(journal_store, _environment(tmp_path))
     with journal_store.transaction() as transaction:
         _begin_promotion(transaction, _promotion_environment(tmp_path))
-    _append_second_record(journal_store)
+    stale_pending = journal_store.pending_path.read_bytes()
+    journal_store.pending_path.unlink()
+    with journal_store.transaction() as transaction:
+        later = _begin_promotion(
+            transaction,
+            _write_private(
+                tmp_path / "journal-second.env",
+                TARGET_ENVIRONMENT_BYTES,
+            ),
+            transaction_id="promote-journal-second",
+        )
+        transaction.record_abort(
+            later.transaction_id,
+            persistent_volumes=PERSISTENT_VOLUMES,
+        )
+    _write_private(journal_store.pending_path, stale_pending)
     with pytest.raises(DeploymentStateError, match="journal baseline is stale"):
         journal_store.read_current()
 
@@ -3241,7 +3328,7 @@ def test_unclean_pending_terminal_must_remain_journal_tail(
 ) -> None:
     """Reject later history after a terminal whose pending cleanup never completed."""
     store = DeploymentStateStore(tmp_path / "state")
-    baseline = _adopt(store, _environment(tmp_path))
+    _adopt(store, _environment(tmp_path))
     real_unlink = Path.unlink
 
     def reject_pending_unlink(selected: Path, missing_ok: bool = False) -> None:
@@ -3267,15 +3354,22 @@ def test_unclean_pending_terminal_must_remain_journal_tail(
                 persistent_volumes=PERSISTENT_VOLUMES,
             )
 
-    terminal_payload = _journal_path(store, 2).read_bytes()
-    later = {
-        "schema_version": 1,
-        "sequence": 3,
-        "previous_sha256": hashlib.sha256(terminal_payload).hexdigest(),
-        "event": "adopted",
-        "state": baseline.state.as_document(),
-    }
-    _write_document(_journal_path(store, 3), later)
+    stale_pending = store.pending_path.read_bytes()
+    store.pending_path.unlink()
+    with store.transaction() as transaction:
+        later = _begin_promotion(
+            transaction,
+            _write_private(
+                tmp_path / "tail-second.env",
+                TARGET_ENVIRONMENT_BYTES,
+            ),
+            transaction_id="promote-tail-second",
+        )
+        transaction.record_abort(
+            later.transaction_id,
+            persistent_volumes=PERSISTENT_VOLUMES,
+        )
+    _write_private(store.pending_path, stale_pending)
 
     with pytest.raises(DeploymentStateError, match="not the journal tail"):
         store.read_current()
