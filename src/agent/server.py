@@ -20,6 +20,7 @@ from .artifact_storage import (
     prepare_artifact_storage,
 )
 from .health import DatabaseReadinessProbe, live
+from .openapi_compat import ensure_unique_operation_ids
 from .utils import (
     ObservabilityEnv,
     ServerEnv,
@@ -93,6 +94,7 @@ def create_app(env: ServerEnv | None = None) -> FastAPI:
 
     app.get("/live")(live)
     app.get("/ready")(ready)
+    ensure_unique_operation_ids(app)
     install_otel_flush_lifespan(app)
     return app
 
