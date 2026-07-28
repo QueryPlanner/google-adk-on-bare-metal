@@ -619,7 +619,7 @@ requires-dist = [
     { name = "greenlet", specifier = ">=3.0.0" },
     { name = "langfuse", specifier = ">=3.12.0" },
     { name = "litellm", specifier = ">=1.60.0" },
-    { name = "mem0ai", specifier = ">=0.1.0" },
+    { name = "mem0ai", specifier = ">=2.0.14" },
     { name = "openinference-instrumentation-google-adk", specifier = ">=0.1.8" },
     { name = "opentelemetry-exporter-gcp-logging", specifier = ">=1.9.0a0,<2.0.0" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = "==1.37.0" },
@@ -1679,9 +1679,10 @@ wheels = [
 
 [[package]]
 name = "mem0ai"
-version = "1.0.8"
+version = "2.0.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "httpx" },
     { name = "openai" },
     { name = "posthog" },
     { name = "protobuf" },
@@ -1690,9 +1691,9 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b7/a6/292b42445cf2f5fb2207d523e31a823c10d5da2e939ece78dac0800edfb1/mem0ai-1.0.8.tar.gz", hash = "sha256:9af38c30b0250b3401f58a6004debf1f84f976b43fc4c6d830700c42b75af54c", size = 198898, upload-time = "2026-03-26T16:54:59.058Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/b2/3d731191e435d8df262da7b1014c5eb872569a99d4c12431b7567832c918/mem0ai-2.0.14.tar.gz", hash = "sha256:e999f23503cc2514fec2439017d9b539edc3f67fbce79d84781e6a93d0352ddb", size = 246753, upload-time = "2026-07-25T12:25:45.347Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/b6/46f94bfa5863e86a1f3f77815728529d2e5b3851e259c611182e2c8c81ea/mem0ai-1.0.8-py3-none-any.whl", hash = "sha256:4852f403d213e5cb463454940f92211eadb6e38c75f2f1ec17f279033d3ba194", size = 296802, upload-time = "2026-03-26T16:54:57.356Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/c8/d1f23dbeefaba3f9eabaa0f3fb2c44763a052a3cc9a6ad96e6a37e1d4c84/mem0ai-2.0.14-py3-none-any.whl", hash = "sha256:9c567df69af794278bc051400829d1a2d4f8aa659cae6cd019d88ec66dbf4f3f", size = 342432, upload-time = "2026-07-25T12:25:43.511Z" },
 ]
 
 [[package]]
@@ -2249,19 +2250,17 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.9.12"
+version = "7.31.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
     { name = "distro" },
-    { name = "python-dateutil" },
     { name = "requests" },
-    { name = "six" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1c/a7/2865487853061fbd62383492237b546d2d8f7c1846272350d2b9e14138cd/posthog-7.9.12.tar.gz", hash = "sha256:ebabf2eb2e1c1fbf22b0759df4644623fa43cc6c9dcbe9fd429b7937d14251ec", size = 176828, upload-time = "2026-03-12T09:01:15.184Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/95/5d50c6add73aad334dcb7f1d5c63c8e24ec22582190076e292cc03dfc294/posthog-7.31.0.tar.gz", hash = "sha256:f9c705e906d5d096589bfcf2ade4ad0c884db37d4e25cc3e73c18a59e2206b2f", size = 387357, upload-time = "2026-07-27T18:36:41.336Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/a9/7a803aed5a5649cf78ea7b31e90d0080181ba21f739243e1741a1e607f1f/posthog-7.9.12-py3-none-any.whl", hash = "sha256:7175bd1698a566bfea98a016c64e3456399f8046aeeca8f1d04ae5bf6c5a38d0", size = 202469, upload-time = "2026-03-12T09:01:13.38Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/c2/67e7d8d0c2223a911668cf47cda45d2eb643b480da2f412d5f808c527f58/posthog-7.31.0-py3-none-any.whl", hash = "sha256:d9f2c383c768d9fd723a83614ed14e0ccba28d7f80602a04e271925d9439f515", size = 460486, upload-time = "2026-07-27T18:36:39.596Z" },
 ]
 
 [[package]]
