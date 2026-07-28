@@ -108,11 +108,30 @@ Best if you don't want to manage Python versions on the host.
     docker compose up --build --wait --wait-timeout 180
     ```
 
-The Compose healthcheck calls the agent's process-level `/health` endpoint from
-inside the container. `--wait` exits successfully only after the service becomes
-healthy; `--wait-timeout` prevents an unhealthy startup from hanging automation
-indefinitely. When `DATABASE_URL` is configured, the entrypoint first runs a
-bounded `SELECT 1` readiness check before starting the server.
+The Compose healthcheck calls `/ready` from inside the container. When
+`DATABASE_URL` is configured, every call opens one bounded connection and runs
+`SELECT 1`; a failed connection, authentication, query, or close returns HTTP
+503. When PostgreSQL is not configured, the response explicitly reports
+`database: not_configured` and remains ready for local, in-memory, or Agent
+Engine-only development. `--wait` exits successfully only after this contract
+passes, while `--wait-timeout` prevents an unhealthy startup from hanging
+automation.
+
+Use `/live` for process-only liveness. ADK's existing `/health` endpoint remains
+a process-only compatibility route. Neither process endpoint checks PostgreSQL.
+The database readiness attempt defaults to two seconds, which is shorter than
+the healthcheck client's three-second HTTP timeout.
+
+This is deliberately a PostgreSQL connectivity check, not a claim that every
+dependency is healthy. It does not prove spare capacity in ADK's internal
+SQLAlchemy pool, schema permissions beyond `SELECT 1`, Agent Engine
+reachability, model/provider availability, tool health, or artifact capacity
+after startup.
+
+Each `/ready` request creates a short-lived database connection and each failure
+emits one generic warning. Keep the endpoint on the loopback/internal operations
+path. If an ingress exposes it, require authentication and rate limiting so
+untrusted callers cannot amplify connection or log load.
 
 ## Artifact Storage Contract
 
@@ -125,9 +144,9 @@ directory at startup. The image and Compose service pin `AGENT_DIR` to
 recreation. PostgreSQL remains the separate session store.
 
 Startup creates the artifact directory when needed and probes create, write,
-flush, sync, unlink, and directory-cleanup access before serving `/health`. If
-the directory is unusable, startup exits non-zero and reports the stable public
-message `Artifact storage is unavailable.` It does not silently select
+flush, sync, unlink, and directory-cleanup access before starting the server.
+If the directory is unusable, startup exits non-zero and reports the stable
+public message `Artifact storage is unavailable.` It does not silently select
 in-memory artifact storage.
 
 The supported server entrypoints are `python -m agent.server` and

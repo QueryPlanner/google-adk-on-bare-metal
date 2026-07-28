@@ -63,6 +63,7 @@ class TestServerEnv:
         assert env.reload_agents is False
         assert env.agent_engine is None
         assert env.database_url is None
+        assert env.db_readiness_probe_timeout == 2
         assert env.openrouter_api_key is None
         assert env.agent_dir is None
         assert env.allow_origins == '["http://127.0.0.1", "http://127.0.0.1:8080"]'
@@ -81,6 +82,7 @@ class TestServerEnv:
             "RELOAD_AGENTS": "true",
             "AGENT_ENGINE": "test-engine-id",
             "DATABASE_URL": "postgresql://user:pass@localhost/db",
+            "DB_READINESS_PROBE_TIMEOUT": "1.5",
             "OPENROUTER_API_KEY": "sk-or-v1-test",
             "AGENT_DIR": "/srv/agents",
             "ALLOW_ORIGINS": '["http://localhost:3000"]',
@@ -99,12 +101,31 @@ class TestServerEnv:
         assert (
             env.database_url.get_secret_value() == "postgresql://user:pass@localhost/db"
         )
+        assert env.db_readiness_probe_timeout == 1.5
         assert isinstance(env.openrouter_api_key, SecretStr)
         assert env.openrouter_api_key.get_secret_value() == "sk-or-v1-test"
         assert env.agent_dir == "/srv/agents"
         assert env.allow_origins == '["http://localhost:3000"]'
         assert env.host == "0.0.0.0"  # noqa: S104
         assert env.port == 9000
+
+    @pytest.mark.parametrize(
+        "probe_timeout",
+        [0, -1, 2.1, 3, float("inf"), float("nan")],
+    )
+    def test_server_env_rejects_readiness_probe_outside_http_budget(
+        self,
+        valid_server_env: dict[str, str],
+        probe_timeout: float,
+    ) -> None:
+        """Keep the database attempt strictly inside the HTTP client timeout."""
+        data = {
+            **valid_server_env,
+            "DB_READINESS_PROBE_TIMEOUT": probe_timeout,
+        }
+
+        with pytest.raises(ValidationError):
+            ServerEnv.model_validate(data)
 
     def test_agent_engine_uri_property(self, valid_server_env: dict[str, str]) -> None:
         """Test that agent_engine_uri property is computed correctly."""
@@ -223,6 +244,7 @@ class TestServerEnv:
         output = captured.out
 
         assert "DB_POOL_PRE_PING" in output
+        assert "DB_READINESS_PROBE_TIMEOUT" in output
         assert "DB_POOL_RECYCLE" in output
         assert "DB_POOL_SIZE" in output
         assert "DB_MAX_OVERFLOW" in output

@@ -35,6 +35,7 @@ _EXAMPLE_SECRET_VALUES = {
 }
 _DATABASE_READINESS_MAX_TIMEOUT = 3600.0
 _DATABASE_READINESS_MAX_INTERVAL = 60.0
+_DATABASE_READINESS_MAX_PROBE_TIMEOUT = 2.0
 _SHARED_ASYNCPG_QUERY_KEYS = frozenset(
     {
         "gsslib",
@@ -482,6 +483,7 @@ class ServerEnv(RedactedBaseSettings):
         reload_agents: Whether to reload agents on file changes (local dev only).
         agent_engine: Agent Engine instance ID for session and memory persistence.
         database_url: Database URL used for persistent session storage.
+        db_readiness_probe_timeout: Maximum duration of an HTTP readiness query.
         openrouter_api_key: OpenRouter key validated before server startup.
         allow_origins: JSON array string of allowed CORS origins.
         host: Server host (127.0.0.1 for local, 0.0.0.0 for containers).
@@ -523,6 +525,14 @@ class ServerEnv(RedactedBaseSettings):
         default=None,
         alias="DATABASE_URL",
         description="Database URL for session storage (e.g., postgresql://...)",
+    )
+
+    db_readiness_probe_timeout: float = Field(
+        default=2.0,
+        alias="DB_READINESS_PROBE_TIMEOUT",
+        gt=0,
+        le=_DATABASE_READINESS_MAX_PROBE_TIMEOUT,
+        description="Maximum seconds for one HTTP database readiness probe",
     )
 
     db_pool_pre_ping: bool = Field(
@@ -621,6 +631,7 @@ class ServerEnv(RedactedBaseSettings):
         masked_database_url = str(self.database_url) if self.database_url else None
         print(f"DATABASE_URL:          {masked_database_url}")
         if self.database_url:
+            print(f"DB_READINESS_PROBE_TIMEOUT: {self.db_readiness_probe_timeout}")
             print(f"DB_POOL_PRE_PING:      {self.db_pool_pre_ping}")
             print(f"DB_POOL_RECYCLE:       {self.db_pool_recycle}")
             print(f"DB_POOL_SIZE:          {self.db_pool_size}")

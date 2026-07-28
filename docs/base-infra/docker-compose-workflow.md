@@ -63,8 +63,15 @@ docker compose up --build --wait --wait-timeout 180
 ```
 
 The healthcheck uses Python's standard HTTP client inside the container to call
-`/health`. It reports process liveness after the container entrypoint has
-completed its bounded database readiness check when `DATABASE_URL` is configured.
+`/ready`. With `DATABASE_URL`, each call runs one bounded PostgreSQL `SELECT 1`
+and returns HTTP 503 when that check fails. Without PostgreSQL it reports
+`database: not_configured` and succeeds. `/live` and ADK's compatibility
+`/health` route are process-only and are not used by Compose.
+
+The recurring database probe defaults to two seconds, below the client's
+three-second HTTP timeout and the container healthcheck's five-second timeout.
+It verifies fresh PostgreSQL connectivity only; it does not inspect ADK's
+internal pool, Agent Engine, models, tools, or post-start artifact capacity.
 
 ---
 

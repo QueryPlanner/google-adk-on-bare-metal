@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import math
 import os
 import signal
 import socket
 import sys
-from contextlib import suppress
 from types import FrameType
 from typing import NoReturn
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg as asyncpg  # type: ignore[import-untyped]
 from tenacity import (
     AsyncRetrying,
     retry_if_exception,
@@ -21,8 +19,12 @@ from tenacity import (
     wait_fixed,
 )
 
+from .database import (
+    _require_positive_finite,
+    check_database,
+    normalize_database_url,
+)
 from .utils import DatabaseReadinessEnv
-from .utils.config import _normalize_asyncpg_database_url
 
 _TRANSIENT_DATABASE_ERROR_TYPES = (
     ConnectionError,
@@ -51,13 +53,6 @@ _TRANSIENT_NETWORK_ERRNOS = frozenset(
 )
 
 
-def _require_positive_finite(name: str, value: float) -> None:
-    """Reject invalid retry timing without including the supplied value."""
-    if not math.isfinite(value) or value <= 0:
-        msg = f"{name} must be a positive finite number"
-        raise ValueError(msg)
-
-
 def _is_transient_database_error(error: BaseException) -> bool:
     """Return whether a failure can plausibly recover during VM startup."""
     if isinstance(error, _TRANSIENT_DATABASE_ERROR_TYPES):
@@ -65,40 +60,6 @@ def _is_transient_database_error(error: BaseException) -> bool:
     return type(error) is OSError and (
         error.errno is None or error.errno in _TRANSIENT_NETWORK_ERRNOS
     )
-
-
-def normalize_database_url(database_url: str) -> str:
-    """Normalize a supported PostgreSQL URL for direct asyncpg use."""
-    return _normalize_asyncpg_database_url(database_url)
-
-
-async def check_database(
-    database_url: str,
-    *,
-    attempt_timeout: float,
-) -> None:
-    """Connect, run the readiness query, and close within one bounded attempt."""
-    _require_positive_finite("attempt_timeout", attempt_timeout)
-
-    connection: asyncpg.Connection | None = None
-    try:
-        async with asyncio.timeout(attempt_timeout):
-            connection = await asyncpg.connect(
-                database_url,
-                timeout=attempt_timeout,
-                command_timeout=attempt_timeout,
-            )
-            result = await connection.fetchval("SELECT 1", timeout=attempt_timeout)
-            if result != 1:
-                msg = "Database readiness query returned an unexpected result"
-                raise RuntimeError(msg)
-            await connection.close(timeout=attempt_timeout)
-            connection = None
-    except BaseException:
-        if connection is not None:
-            with suppress(Exception):
-                connection.terminate()
-        raise
 
 
 async def wait_for_database(

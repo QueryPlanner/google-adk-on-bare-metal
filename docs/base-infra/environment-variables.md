@@ -39,6 +39,22 @@ following bounds:
 - **Default:** `5`
 - **Purpose:** Maximum seconds for one connection, query, and close attempt
 
+**DB_READINESS_PROBE_TIMEOUT**
+- **Default:** `2`
+- **Range:** Greater than `0` and at most `2`
+- **Purpose:** Maximum seconds for one recurring `/ready` PostgreSQL attempt
+
+The HTTP readiness budget is separate from startup retries and is always
+shorter than the Compose client's three-second timeout. `/ready` performs one
+fresh authenticated `SELECT 1` without retrying. A failure returns HTTP 503
+without returning or logging the database URL, credentials, database name, or
+exception text.
+
+`/ready` reports only PostgreSQL connectivity. It does not verify ADK's internal
+SQLAlchemy pool or schema permissions beyond `SELECT 1`, Agent Engine, the model
+provider, tools, or artifact capacity after startup. `/live` and ADK's legacy
+`/health` route are process-only.
+
 ### API Keys
 
 **GOOGLE_API_KEY**
