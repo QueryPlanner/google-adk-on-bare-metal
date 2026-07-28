@@ -1506,6 +1506,9 @@ def _wait_for_sanitized_canaries(
     last_request_count = 0
     last_span_count = 0
     while time.monotonic() < deadline:
+        if _capture_count(harness) == 0:
+            time.sleep(0.5)
+            continue
         snapshot = tmp_path / f"capture-{attempt:03d}"
         attempt += 1
         _copy_capture(harness, snapshot)
