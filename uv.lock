@@ -665,7 +665,7 @@ requires-dist = [
     { name = "greenlet", specifier = ">=3.0.0" },
     { name = "langfuse", specifier = ">=3.12.0" },
     { name = "litellm", specifier = ">=1.83.7,<=1.83.14" },
-    { name = "mem0ai", specifier = ">=0.1.0" },
+    { name = "mem0ai", specifier = ">=1.0.11" },
     { name = "openinference-instrumentation-google-adk", specifier = ">=0.1.17" },
     { name = "opentelemetry-exporter-gcp-logging", specifier = ">=1.9.0a0,<2.0.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = "==1.37.0" },
@@ -1764,7 +1764,7 @@ wheels = [
 
 [[package]]
 name = "mem0ai"
-version = "1.0.8"
+version = "1.0.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
@@ -1775,9 +1775,9 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b7/a6/292b42445cf2f5fb2207d523e31a823c10d5da2e939ece78dac0800edfb1/mem0ai-1.0.8.tar.gz", hash = "sha256:9af38c30b0250b3401f58a6004debf1f84f976b43fc4c6d830700c42b75af54c", size = 198898, upload-time = "2026-03-26T16:54:59.058Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/91/1e/2f8a8cc4b8e7f6126f3367d27dc65eac5cd4ceb854888faa3a8f62a2c0a0/mem0ai-1.0.11.tar.gz", hash = "sha256:ddb803bedc22bd514606d262407782e88df929f6991b59f6972fb8a25cc06001", size = 201758, upload-time = "2026-04-06T11:31:43.695Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/b6/46f94bfa5863e86a1f3f77815728529d2e5b3851e259c611182e2c8c81ea/mem0ai-1.0.8-py3-none-any.whl", hash = "sha256:4852f403d213e5cb463454940f92211eadb6e38c75f2f1ec17f279033d3ba194", size = 296802, upload-time = "2026-03-26T16:54:57.356Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/b5/f822c94e1b901f8a700af134c2473646de9a7db26364566f6a72d527d235/mem0ai-1.0.11-py3-none-any.whl", hash = "sha256:bcf4d678dc0a4d4e8eccaebe05562eae022fcdc825a0e3095d02f28cf61a5b6d", size = 297138, upload-time = "2026-04-06T11:31:41.716Z" },
 ]
 
 [[package]]
