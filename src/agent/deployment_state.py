@@ -1294,7 +1294,12 @@ class DeploymentStateTransaction:
                 )
             if entry.previous_sha256 != previous_sha256:
                 raise DeploymentStateError("deployment journal hash chain is invalid")
-            if entry.event != "adopted":
+            if entry.event == "adopted":
+                if entries:
+                    raise DeploymentStateError(
+                        "deployment journal adoption is not initial"
+                    )
+            else:
                 transaction_id = cast(str, entry.transaction_id)
                 intent_sha256 = cast(str, entry.intent_sha256)
                 if transaction_id in completed_transactions:
