@@ -1,5 +1,6 @@
 """Compose smoke workflow safety and behavior contract tests."""
 
+import re
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
@@ -8,7 +9,12 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "test-docker-compose.yml"
-CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+CHECKOUT_USES_PATTERN = re.compile(
+    r"^[ \t]*uses:[ \t]+actions/checkout@"
+    r"(?P<reference>[^ \t#\r\n]+)"
+    r"(?P<annotation>[ \t]+#[ \t]*v\d+\.\d+\.\d+)?[ \t]*$",
+    re.MULTILINE,
+)
 SMOKE_STEP_NAME = "Build and smoke-test Compose project"
 
 
@@ -19,6 +25,22 @@ class SmokeHarness(NamedTuple):
     docker_log: Path
     python_log: Path
     runner_temp: Path
+
+
+def _workflow_step_block(document: str, step_name: str) -> str:
+    """Extract one complete workflow step by its display name."""
+    lines = document.splitlines()
+    step_start = lines.index(f"      - name: {step_name}")
+    step_lines = [lines[step_start]]
+
+    for line in lines[step_start + 1 :]:
+        if line.startswith("      - name: "):
+            break
+        if line and not line.startswith("        "):
+            break
+        step_lines.append(line)
+
+    return "\n".join(step_lines)
 
 
 def _workflow_step_script(document: str, step_name: str) -> str:
@@ -156,14 +178,36 @@ def test_workflow_has_unprivileged_complete_ci_triggers() -> None:
 def test_workflow_checkout_is_immutable_and_drops_credentials() -> None:
     """Keep PR-controlled Docker builds away from persistent Git credentials."""
     document = WORKFLOW_PATH.read_text(encoding="utf-8")
+    checkout_step = _workflow_step_block(document, "Checkout repository")
+    checkout_uses = list(CHECKOUT_USES_PATTERN.finditer(document))
 
-    assert f"uses: actions/checkout@{CHECKOUT_SHA}" in document
-    assert "persist-credentials: false" in document
+    assert len(checkout_uses) == 1
+    checkout_use = checkout_uses[0]
+    checkout_reference = checkout_use.group("reference")
+    assert checkout_use.group(0).strip() in checkout_step
+    assert re.fullmatch(r"[0-9a-f]{40}", checkout_reference)
+    assert checkout_reference != "0" * 40
+    assert checkout_use.group("annotation") is not None
+    assert "persist-credentials: false" in checkout_step
     assert "secrets." not in document
     assert "packages: write" not in document
     assert "docker/login-action" not in document
     assert "setup-qemu" not in document
     assert "push: true" not in document
+
+
+def test_checkout_matcher_ignores_commented_pins() -> None:
+    """Do not let documentation hide an active mutable checkout reference."""
+    document = """
+        # uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
+    """
+
+    checkout_references = [
+        match.group("reference") for match in CHECKOUT_USES_PATTERN.finditer(document)
+    ]
+
+    assert checkout_references == ["v7"]
 
 
 def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
