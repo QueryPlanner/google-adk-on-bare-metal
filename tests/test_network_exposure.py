@@ -44,6 +44,7 @@ def test_compose_defaults_to_loopback_and_headless_runtime() -> None:
     assert agent["environment"] == [
         "HOST=0.0.0.0",
         "PORT=8080",
+        "AGENT_DIR=/app/src",
         "AGENT_NAME=local-dev",
         "LOG_LEVEL=INFO",
         "RELOAD_AGENTS=${RELOAD_AGENTS:-false}",

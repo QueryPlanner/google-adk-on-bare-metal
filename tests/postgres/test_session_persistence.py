@@ -50,7 +50,7 @@ payload = {
     "state": {"persisted": "real-postgres"},
 }
 
-with TestClient(server.app) as client:
+with TestClient(server.create_app()) as client:
     created = client.post(base_path, json=payload)
     duplicate = client.post(base_path, json=payload)
 
@@ -72,7 +72,7 @@ from agent import server
 base_path = "/apps/agent/users/integration-user/sessions"
 session_path = base_path + "/persistent-session"
 
-with TestClient(server.app) as client:
+with TestClient(server.create_app()) as client:
     fetched = client.get(session_path)
     listed = client.get(base_path)
     deleted = client.delete(session_path)
@@ -406,9 +406,15 @@ def _bounded_diagnostics(output: str, database_url: str) -> str:
     return redacted[-4000:]
 
 
-def _assert_local_storage_disabled(phase_root: Path) -> None:
-    """Verify the ADK child created no local storage tree."""
-    assert list(phase_root.rglob(".adk")) == []
+def _assert_only_artifact_local_storage(phase_root: Path) -> None:
+    """Permit artifacts while proving sessions did not fall back to SQLite."""
+    adk_root = phase_root / "agents" / ".adk"
+    artifact_root = adk_root / "artifacts"
+
+    assert sorted(phase_root.rglob(".adk")) == [adk_root]
+    assert artifact_root.is_dir()
+    assert set(adk_root.iterdir()) == {artifact_root}
+    assert list(phase_root.rglob("session.db*")) == []
 
 
 def test_database_url_replaces_admin_user_information() -> None:
@@ -645,7 +651,7 @@ def test_session_persists_across_server_processes(
         _CREATE_PHASE,
     )
 
-    _assert_local_storage_disabled(create_root)
+    _assert_only_artifact_local_storage(create_root)
     assert create_result["created_status"] == 200
     assert create_result["duplicate_status"] == 409
     assert create_result["created_body"]["id"] == _SESSION_ID
@@ -659,7 +665,7 @@ def test_session_persists_across_server_processes(
         _RESTART_PHASE,
     )
 
-    _assert_local_storage_disabled(restart_root)
+    _assert_only_artifact_local_storage(restart_root)
     assert restart_result["fetched_status"] == 200
     assert restart_result["fetched_body"]["id"] == _SESSION_ID
     assert restart_result["fetched_body"]["state"] == {"persisted": _PERSISTED_VALUE}

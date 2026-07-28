@@ -36,18 +36,27 @@ jobs:
 
           ENV_FILE=""
           OVERRIDE_FILE=""
+          READ_ONLY_OVERRIDE_FILE=""
+          READ_ONLY_ARTIFACT_PARENT=""
+          SUPPRESS_CLEANUP_AGENT_LOGS=0
           compose=()
+          readonly_compose=()
 
           cleanup() {
             exit_code=$?
             down_exit_code=0
+            temp_exit_code=0
             trap - EXIT INT TERM
 
             if [ "${#compose[@]}" -gt 0 ]; then
               if [ "$exit_code" -ne 0 ]; then
                 "${compose[@]}" ps --all || true
-                "${compose[@]}" logs \
-                  --no-color --timestamps --tail=200 agent || true
+                if [ "$SUPPRESS_CLEANUP_AGENT_LOGS" -eq 0 ]; then
+                  "${compose[@]}" logs \
+                    --no-color --timestamps --tail=200 agent || true
+                else
+                  echo "Agent logs withheld after storage failure."
+                fi
               fi
 
               "${compose[@]}" down \
@@ -60,10 +69,21 @@ jobs:
             fi
 
             if [ -n "$ENV_FILE" ]; then
-              rm -f "$ENV_FILE"
+              rm -f "$ENV_FILE" || temp_exit_code=1
             fi
             if [ -n "$OVERRIDE_FILE" ]; then
-              rm -f "$OVERRIDE_FILE"
+              rm -f "$OVERRIDE_FILE" || temp_exit_code=1
+            fi
+            if [ -n "$READ_ONLY_OVERRIDE_FILE" ]; then
+              rm -f "$READ_ONLY_OVERRIDE_FILE" || temp_exit_code=1
+            fi
+            if [ -n "$READ_ONLY_ARTIFACT_PARENT" ]; then
+              chmod 0700 "$READ_ONLY_ARTIFACT_PARENT" 2>/dev/null || true
+              rmdir "$READ_ONLY_ARTIFACT_PARENT" || temp_exit_code=1
+            fi
+
+            if [ "$exit_code" -eq 0 ] && [ "$temp_exit_code" -ne 0 ]; then
+              exit_code=$temp_exit_code
             fi
 
             exit "$exit_code"
@@ -80,7 +100,14 @@ jobs:
           OVERRIDE_FILE="$(
             mktemp "${RUNNER_TEMP}/compose-smoke-override.XXXXXX.yaml"
           )"
-          export ENV_FILE
+          READ_ONLY_OVERRIDE_FILE="$(
+            mktemp "${RUNNER_TEMP}/compose-smoke-read-only.XXXXXX.yaml"
+          )"
+          READ_ONLY_ARTIFACT_PARENT="$(
+            mktemp -d "${RUNNER_TEMP}/compose-smoke-artifacts.XXXXXX"
+          )"
+          chmod 0555 "$READ_ONLY_ARTIFACT_PARENT"
+          export ENV_FILE READ_ONLY_ARTIFACT_PARENT
 
           printf '%s\n' \
             '# Synthetic secret-free Compose smoke environment' \
@@ -96,12 +123,28 @@ jobs:
               restart: "no"
           YAML
 
+          cat > "$READ_ONLY_OVERRIDE_FILE" <<'YAML'
+          services:
+            agent:
+              volumes: !override
+                - type: bind
+                  source: ${READ_ONLY_ARTIFACT_PARENT:?Set READ_ONLY_ARTIFACT_PARENT}
+                  target: /app/src/.adk
+                  read_only: true
+                  bind:
+                    create_host_path: false
+          YAML
+
           compose=(
             docker compose
             --project-name "$SMOKE_PROJECT"
             --env-file "$ENV_FILE"
             -f compose.yaml
             -f "$OVERRIDE_FILE"
+          )
+          readonly_compose=(
+            "${compose[@]}"
+            -f "$READ_ONLY_OVERRIDE_FILE"
           )
 
           resolved_images="$("${compose[@]}" config --images)"
@@ -111,6 +154,7 @@ jobs:
           fi
 
           "${compose[@]}" config --quiet
+          "${readonly_compose[@]}" config --quiet
           "${compose[@]}" build
           "${compose[@]}" up \
             --detach --no-build --wait --wait-timeout 180
@@ -128,18 +172,160 @@ jobs:
             exit 1
           fi
 
-          python3 -c '
+          SMOKE_PHASE=save python3 - <<'PY'
           import json
           import urllib.request
 
+          artifact_text = "artifact persisted across agent recreation"
+          artifacts_path = (
+              "http://127.0.0.1:8080/apps/agent/users/"
+              "compose-smoke-user/sessions/compose-smoke-session/artifacts"
+          )
+          request = urllib.request.Request(
+              artifacts_path,
+              data=json.dumps(
+                  {
+                      "filename": "compose-smoke.txt",
+                      "artifact": {"text": artifact_text},
+                  }
+              ).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
           opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-          with opener.open(
-              "http://127.0.0.1:8080/health", timeout=3
-          ) as response:
-              payload = json.load(response)
+          with opener.open(request, timeout=5) as response:
+              saved = json.load(response)
 
-          if payload != {"status": "ok"}:
-              raise SystemExit(f"Unexpected health payload: {payload!r}")
-          '
+          if saved.get("version") != 0:
+              raise SystemExit(f"Unexpected artifact version: {saved!r}")
+          PY
 
-          echo "Compose startup and health checks passed."
+          "${compose[@]}" up \
+            --detach --no-build --force-recreate --no-deps \
+            --wait --wait-timeout 180 agent
+
+          recreated_container_id="$("${compose[@]}" ps --all -q agent)"
+          if [ -z "$recreated_container_id" ]; then
+            echo "Compose did not recreate the agent container." >&2
+            exit 1
+          fi
+          if [ "$recreated_container_id" = "$container_id" ]; then
+            echo "Compose reused the original agent container." >&2
+            exit 1
+          fi
+
+          SMOKE_PHASE=load python3 - <<'PY'
+          import json
+          import urllib.request
+
+          artifact_text = "artifact persisted across agent recreation"
+          artifact_url = (
+              "http://127.0.0.1:8080/apps/agent/users/"
+              "compose-smoke-user/sessions/compose-smoke-session/artifacts/"
+              "compose-smoke.txt/versions/0"
+          )
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          with opener.open(artifact_url, timeout=5) as response:
+              loaded = json.load(response)
+
+          if loaded != {"text": artifact_text}:
+              raise SystemExit(f"Unexpected artifact payload: {loaded!r}")
+          PY
+
+          SUPPRESS_CLEANUP_AGENT_LOGS=1
+          readonly_up_exit=0
+          "${readonly_compose[@]}" up \
+            --detach --no-build --force-recreate --no-deps \
+            --wait --wait-timeout 30 agent \
+            || readonly_up_exit=$?
+
+          if [ "$readonly_up_exit" -eq 0 ]; then
+            echo "Read-only artifact storage unexpectedly became healthy." >&2
+            exit 1
+          fi
+
+          readonly_container_id="$(
+            "${readonly_compose[@]}" ps --all -q agent
+          )"
+          if [ -z "$readonly_container_id" ]; then
+            echo "Read-only case did not create the agent container." >&2
+            exit 1
+          fi
+
+          readonly_status="$(
+            docker inspect --format '{{.State.Status}}' \
+              "$readonly_container_id"
+          )"
+          readonly_exit_code="$(
+            docker inspect --format '{{.State.ExitCode}}' \
+              "$readonly_container_id"
+          )"
+          readonly_health="$(
+            docker inspect \
+              --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+              "$readonly_container_id"
+          )"
+
+          if [ "$readonly_status" != "exited" ]; then
+            printf 'Read-only agent did not exit: %s.\n' \
+              "$readonly_status" >&2
+            exit 1
+          fi
+          if [ "$readonly_exit_code" -eq 0 ]; then
+            echo "Read-only agent exited successfully." >&2
+            exit 1
+          fi
+          if [ "$readonly_health" = "healthy" ]; then
+            echo "Read-only agent reported healthy." >&2
+            exit 1
+          fi
+
+          readonly_logs="$(
+            "${readonly_compose[@]}" logs \
+              --no-color --timestamps --tail=200 agent
+          )"
+
+          if ! grep -Fq 'Artifact storage is unavailable.' \
+            <<< "$readonly_logs"; then
+            echo "Read-only failure omitted the public storage message." >&2
+            exit 1
+          fi
+
+          for forbidden in \
+            'Traceback (most recent call last)' \
+            'PermissionError' \
+            'FileNotFoundError' \
+            'NotADirectoryError' \
+            'OSError' \
+            'ValueError' \
+            '[Errno' \
+            '/app/src' \
+            '.artifact-storage-probe-' \
+            '.probe-' \
+            'AGENT_DIR'
+          do
+            if grep -Fq "$forbidden" <<< "$readonly_logs"; then
+              echo "Read-only diagnostics failed sanitization." >&2
+              exit 1
+            fi
+          done
+
+          storage_message_count="$(
+            grep -Fo 'Artifact storage is unavailable.' \
+              <<< "$readonly_logs" \
+              | wc -l
+          )"
+          storage_message_line="$(
+            grep -F 'Artifact storage is unavailable.' \
+              <<< "$readonly_logs"
+          )"
+          if [ "$storage_message_count" -ne 1 ] \
+            || [[ "$storage_message_line" \
+              != *'[ERROR] agent.server: Artifact storage is unavailable.' ]]
+          then
+            echo "Read-only public storage line was not exact." >&2
+            exit 1
+          fi
+
+          echo "Artifact storage is unavailable."
+          echo "Compose artifact persistence and failure checks passed."

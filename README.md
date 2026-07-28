@@ -12,7 +12,8 @@ We believe you should own your agents. This template is designed to strip away t
 - 🔄 **CI/CD Included**: GitHub Actions workflow builds multi-arch images (AMD64/ARM64) and pushes to GHCR automatically.
 - 🔭 **Open Observability**: Built-in OpenTelemetry (OTel) instrumentation. Pre-configured for **Langfuse**, but easily adaptable to Jaeger, Prometheus, or any OTel-compatible backend.
 - 🚀 **Modern Stack**: Python 3.13, `uv`, `fastapi`, `asyncpg`.
-- 💾 **Production Persistence**: Postgres-backed sessions out of the box.
+- 💾 **VM Persistence**: Postgres-backed sessions and local artifacts retained
+  across normal process and container recreation.
 
 ## Quickstart
 
@@ -82,6 +83,29 @@ docker compose up --build --wait --wait-timeout 180
 The bounded `--wait` command returns only after the agent's container
 healthcheck passes, so scripts can distinguish a healthy startup from a
 container that merely started.
+
+## Artifact persistence
+
+The filesystem artifact root is fixed at `<AGENT_DIR>/.adk/artifacts`. In the
+container, `AGENT_DIR` is `/app/src`; Compose mounts the `agent_artifacts` named
+volume at `/app/src/.adk`, so artifacts survive normal agent-container
+recreation. PostgreSQL session persistence is a separate storage contract.
+
+Dedicate each artifact root to one ADK application. Run only one writer at a
+time for a given `user_id`/`session_id`/`filename` key because the local backend
+does not coordinate concurrent version allocation for the same key.
+
+This is persistence across normal process or container recreation, not
+power-loss safety or crash consistency. The template does not add application
+authentication, quotas, retention, encryption, or backup automation. ADK
+creates artifact directories and files according to the process umask, so
+ownership, permissions, umask, and backups remain operator responsibilities.
+Treat the volume as trusted application data and do not grant untrusted users
+host or volume write access.
+
+`docker compose down` retains the named volume. In contrast,
+`docker compose down --volumes` permanently deletes the artifact volume and all
+artifacts in it.
 
 ## Secure access
 

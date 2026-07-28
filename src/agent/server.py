@@ -5,6 +5,7 @@ features using custom OpenTelemetry setup. Includes an optional ADK web interfac
 interactive agent testing.
 """
 
+import logging
 from pathlib import Path
 
 import uvicorn
@@ -12,6 +13,11 @@ from fastapi import FastAPI
 from google.adk.cli.fast_api import get_fast_api_app
 from openinference.instrumentation.google_adk import GoogleADKInstrumentor
 
+from .artifact_storage import (
+    ARTIFACT_STORAGE_ERROR_MESSAGE,
+    ArtifactStorageError,
+    prepare_artifact_storage,
+)
 from .utils import (
     ObservabilityEnv,
     ServerEnv,
@@ -20,55 +26,9 @@ from .utils import (
     setup_logging,
 )
 
-# Load and validate environment configuration
-env = initialize_environment(ServerEnv)
-observability_env = initialize_environment(ObservabilityEnv, print_config=False)
-
-# Configure OpenTelemetry
-configure_otel_resource(
-    agent_name=env.agent_name,
-    settings=observability_env,
-)
-
-# Initialize Langfuse/OpenInference instrumentation
-GoogleADKInstrumentor().instrument()
-
-# Configure logging
-setup_logging(log_level=env.log_level)
+logger = logging.getLogger("agent.server")
 
 
-# Use .resolve() to handle symlinks and ensure absolute path across environments
-AGENT_DIR = env.agent_dir or str(Path(__file__).resolve().parent.parent)
-
-# Handle database URL conversion for asyncpg
-session_uri = env.session_uri
-if session_uri and session_uri.startswith("postgresql://"):
-    session_uri = session_uri.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-# Define engine/pool settings for asyncpg connections
-session_db_kwargs = {
-    "pool_pre_ping": env.db_pool_pre_ping,
-    "pool_recycle": env.db_pool_recycle,
-    "pool_size": env.db_pool_size,
-    "max_overflow": env.db_max_overflow,
-    "pool_timeout": env.db_pool_timeout,
-}
-
-# ADK fastapi app will set up OTel using resource attributes from env vars
-app: FastAPI = get_fast_api_app(
-    agents_dir=AGENT_DIR,
-    session_service_uri=session_uri,
-    session_db_kwargs=session_db_kwargs,
-    artifact_service_uri=None,  # Explicitly None as GCP bucket not used
-    # Memory service does not yet support Postgres scheme in ADK
-    memory_service_uri=None,
-    allow_origins=env.allow_origins_list,
-    web=env.serve_web_interface,
-    reload_agents=env.reload_agents,
-)
-
-
-@app.get("/health")
 async def health() -> dict[str, str]:
     """Health check endpoint for container orchestration.
 
@@ -76,6 +36,50 @@ async def health() -> dict[str, str]:
         dict with status key indicating service health
     """
     return {"status": "ok"}
+
+
+def create_app(env: ServerEnv | None = None) -> FastAPI:
+    """Create a configured ADK FastAPI application with durable artifacts."""
+    server_env = env or initialize_environment(ServerEnv, print_config=False)
+    observability_env = initialize_environment(ObservabilityEnv, print_config=False)
+
+    configure_otel_resource(
+        agent_name=server_env.agent_name,
+        settings=observability_env,
+    )
+    GoogleADKInstrumentor().instrument()
+    setup_logging(log_level=server_env.log_level)
+
+    configured_agent_dir = (
+        server_env.agent_dir or Path(__file__).resolve().parent.parent
+    )
+    artifact_storage = prepare_artifact_storage(configured_agent_dir)
+
+    session_uri = server_env.session_uri
+    if session_uri and session_uri.startswith("postgresql://"):
+        session_uri = session_uri.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    session_db_kwargs = {
+        "pool_pre_ping": server_env.db_pool_pre_ping,
+        "pool_recycle": server_env.db_pool_recycle,
+        "pool_size": server_env.db_pool_size,
+        "max_overflow": server_env.db_max_overflow,
+        "pool_timeout": server_env.db_pool_timeout,
+    }
+
+    app = get_fast_api_app(
+        agents_dir=str(artifact_storage.agents_dir),
+        session_service_uri=session_uri,
+        session_db_kwargs=session_db_kwargs,
+        artifact_service_uri=artifact_storage.artifact_service_uri,
+        # Memory service does not yet support Postgres scheme in ADK
+        memory_service_uri=None,
+        allow_origins=server_env.allow_origins_list,
+        web=server_env.serve_web_interface,
+        reload_agents=server_env.reload_agents,
+    )
+    app.get("/health")(health)
+    return app
 
 
 def main() -> None:
@@ -101,6 +105,14 @@ def main() -> None:
         HOST: Server host (default: 127.0.0.1, set to 0.0.0.0 for containers)
         PORT: Server port (default: 8080)
     """
+    env = initialize_environment(ServerEnv, print_config=False)
+    try:
+        app = create_app(env)
+    except ArtifactStorageError:
+        logger.error(ARTIFACT_STORAGE_ERROR_MESSAGE)
+        raise SystemExit(1) from None
+
+    env.print_config()
     uvicorn.run(
         app,
         host=env.host,

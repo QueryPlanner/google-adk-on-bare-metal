@@ -295,10 +295,10 @@ This causes the ADK web UI to show all installed packages (.dist-info directorie
 
 **The Solution:**
 
-```python
-# In server.py - configurable with smart default
-AGENT_DIR = os.getenv("AGENT_DIR", str(Path(__file__).parent.parent))
-```
+The typed `ServerEnv.agent_dir` setting supplies the configured path. The
+application factory otherwise derives the installed `src` directory from
+`Path(__file__)`, resolves it once, and uses that same absolute path for ADK and
+the filesystem artifact service.
 
 ```dockerfile
 # In Dockerfile - override for Docker environment
@@ -347,7 +347,8 @@ CMD ["python", "-m", "agent.server"]
 - Calls `server.main()` for unified startup logic
   - Sets up OpenTelemetry observability (traces and logs to your preferred backend)
   - Consistent entry point for both local dev (`uv run server`) and Docker
-- `main()` calls `uvicorn.run(app, host=os.getenv("HOST", "127.0.0.1"), port=...)`
+- `main()` builds the application with `create_app()` only after storage
+  readiness succeeds, then calls `uvicorn.run(app, host=env.host, port=env.port)`
   - Secure default: 127.0.0.1 (only local connections)
   - Dockerfile sets `HOST=0.0.0.0` to explicitly bind all interfaces for containers
   - Respects HOST and PORT environment variables for flexibility
