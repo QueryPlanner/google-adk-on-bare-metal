@@ -42,7 +42,15 @@ uv sync
 ```bash
 uv run python -m agent.server
 ```
-Visit `http://127.0.0.1:8080`.
+Visit `http://127.0.0.1:8080/docs` for the API documentation. The ADK
+development UI is disabled by default; enable it only for local or SSH-tunneled
+development:
+
+```bash
+SERVE_WEB_INTERFACE=true uv run python -m agent.server
+```
+
+Then visit `http://127.0.0.1:8080`.
 
 ## Deployment: It's Just One Command
 
@@ -74,6 +82,18 @@ docker compose up --build --wait --wait-timeout 180
 The bounded `--wait` command returns only after the agent's container
 healthcheck passes, so scripts can distinguish a healthy startup from a
 container that merely started.
+
+## Secure access
+
+Compose publishes the agent only on `127.0.0.1:8080` by default, and the ADK
+development web interface and agent reload are disabled. Google ADK's HTTP,
+streaming, WebSocket, session, and artifact routes do not gain application
+authentication from those settings. Do not open or publicly publish port 8080.
+
+Use an SSH tunnel for temporary development access, or place an authenticated
+HTTPS reverse proxy in front of the entire upstream on port 443. The
+[deployment guide](docs/DEPLOYMENT.md#network-security-boundary) documents the
+requirements and the migration checks for existing VMs.
 
 👉 **[Read the Full Deployment Guide](docs/DEPLOYMENT.md)**
 

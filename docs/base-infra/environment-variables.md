@@ -85,11 +85,23 @@ following bounds:
 
 **HOST**
 - **Default:** `127.0.0.1`
-- **Purpose:** Server bind address (use `0.0.0.0` for Docker)
+- **Purpose:** Process bind address for direct and systemd runs
+
+Compose overrides `HOST` to `0.0.0.0` inside the container. That internal bind
+does not publish the service on the VM.
 
 **PORT**
 - **Default:** `8080`
 - **Purpose:** Server listening port
+
+**AGENT_PUBLISH_HOST**
+- **When:** Docker Compose only
+- **Default:** `127.0.0.1`
+- **Purpose:** Host-side address used to publish container port 8080
+
+Setting `AGENT_PUBLISH_HOST=0.0.0.0` exposes the unauthenticated ADK API on
+every host interface. It is an unsafe escape hatch, not a substitute for an
+authenticated HTTPS reverse proxy.
 
 ### Feature Flags
 
@@ -159,3 +171,7 @@ variables first when using that low-level import path.
 
 - **Never commit `.env` files** - Already gitignored
 - **Rotate credentials** - If `.env` is accidentally committed, rotate all credentials
+- **Keep port 8080 on loopback** - Authenticate the entire upstream before
+  exposing it through HTTPS
+- **Keep the ADK web interface disabled on VMs** - Enable it temporarily through
+  an SSH tunnel when needed

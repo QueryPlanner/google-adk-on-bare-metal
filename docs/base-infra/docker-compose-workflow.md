@@ -135,11 +135,16 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 # Logging verbosity
 LOG_LEVEL=DEBUG
 
-# Enable web UI
-SERVE_WEB_INTERFACE=true
+# Safe VM defaults
+AGENT_PUBLISH_HOST=127.0.0.1
+SERVE_WEB_INTERFACE=false
+RELOAD_AGENTS=false
 ```
 
-**Note:** The container uses `HOST=0.0.0.0` to allow connections from the host machine.
+**Note:** The container uses `HOST=0.0.0.0` internally, while Compose publishes
+it only on `127.0.0.1:8080` on the host. Verify with
+`docker compose port agent 8080`. Enable the web UI only for temporary local or
+SSH-tunneled development access.
 
 ---
 
@@ -159,8 +164,7 @@ SERVE_WEB_INTERFACE=true
 # Check what's using port 8080
 lsof -i :8080
 
-# Stop the conflicting process or change PORT in .env
-PORT=8001
+# Stop the conflicting process before starting Compose
 ```
 
 ---

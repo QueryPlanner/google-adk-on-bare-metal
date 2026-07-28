@@ -92,6 +92,10 @@ case " $* " in
     printf '%s\\n' "synthetic-container-id"
     exit 0
     ;;
+  *" port agent 8080 "*)
+    printf '%s\\n' "${FAKE_PUBLISHED_ADDRESS:-127.0.0.1:8080}"
+    exit 0
+    ;;
   *" ps --all "*|*" logs "*)
     exit 0
     ;;
@@ -239,8 +243,6 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
         'mktemp "${RUNNER_TEMP}/compose-smoke-override.XXXXXX.yaml"',
         "export ENV_FILE",
         "env_file: !override",
-        "ports: !override",
-        '"127.0.0.1:8080:8080"',
         'restart: "no"',
         'OTEL_SDK_DISABLED: "true"',
         '"${compose[@]}" config --images',
@@ -249,6 +251,9 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
         '"${compose[@]}" config --quiet',
         '"${compose[@]}" build',
         "--detach --no-build --wait --wait-timeout 180",
+        '"${compose[@]}" port agent 8080',
+        'if [ "$published_address" != "127.0.0.1:8080" ]; then',
+        "Unexpected published address:",
         "python3 -c",
         'if payload != {"status": "ok"}:',
         'raise SystemExit(f"Unexpected health payload: {payload!r}")',
@@ -263,6 +268,7 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
     for fragment in required_fragments:
         assert fragment in document or fragment in script
 
+    assert "ports: !override" not in document
     assert "volumes: !reset" not in document
     assert "assert payload" not in script
 
@@ -273,6 +279,7 @@ def test_smoke_script_is_secret_free_bounded_and_self_cleaning() -> None:
         '"${compose[@]}" config --quiet',
         '"${compose[@]}" build',
         '"${compose[@]}" up',
+        '"${compose[@]}" port agent 8080',
         "python3 -c",
     )
     positions = [script.index(fragment) for fragment in ordered_fragments]
@@ -313,6 +320,7 @@ def test_smoke_script_success_probes_and_cleans_up(
         " build",
         " up --detach",
         " ps --all -q agent",
+        " port agent 8080",
         " down --volumes",
     )
     positions = [
@@ -323,6 +331,30 @@ def test_smoke_script_success_probes_and_cleans_up(
     assert not any(call.endswith(" ps --all") for call in calls)
     assert not any(" logs " in call for call in calls)
     assert smoke_harness.python_log.read_text(encoding="utf-8") == "called\n"
+    _assert_runner_temp_is_empty(smoke_harness)
+
+
+def test_smoke_script_rejects_non_loopback_publication(
+    smoke_harness: SmokeHarness,
+) -> None:
+    """Fail before probing health when Compose publishes on every interface."""
+    document = WORKFLOW_PATH.read_text(encoding="utf-8")
+    script = _workflow_step_script(document, SMOKE_STEP_NAME)
+
+    result = _run_smoke_script(
+        script,
+        smoke_harness,
+        FAKE_PUBLISHED_ADDRESS="0.0.0.0:8080",
+    )
+
+    assert result.returncode == 1
+    assert "Unexpected published address: 0.0.0.0:8080" in result.stderr
+    calls = _docker_calls(smoke_harness)
+    assert any(" port agent 8080" in call for call in calls)
+    assert any(call.endswith(" ps --all") for call in calls)
+    assert any(" logs " in call for call in calls)
+    assert any(" down --volumes" in call for call in calls)
+    assert smoke_harness.python_log.read_text(encoding="utf-8") == ""
     _assert_runner_temp_is_empty(smoke_harness)
 
 

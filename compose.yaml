@@ -5,14 +5,17 @@ services:
     image: ${IMAGE:-agent}
     build: .
     ports:
-      - "8080:8080"
+      - target: 8080
+        published: "8080"
+        host_ip: "${AGENT_PUBLISH_HOST:-127.0.0.1}"
+        protocol: tcp
     environment:
       - HOST=0.0.0.0
       - PORT=8080
       - AGENT_NAME=local-dev
       - LOG_LEVEL=INFO
-      - RELOAD_AGENTS=true
-      - SERVE_WEB_INTERFACE=true
+      - RELOAD_AGENTS=${RELOAD_AGENTS:-false}
+      - SERVE_WEB_INTERFACE=${SERVE_WEB_INTERFACE:-false}
       # DATABASE_URL and API Keys will be loaded from the .env file
     env_file:
       - .env
