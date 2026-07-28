@@ -198,7 +198,7 @@ CRAFTED_SENDER = textwrap.dedent(
     from __future__ import annotations
 
     import os
-    from http.client import HTTPSConnection
+    from http.client import HTTPException, HTTPResponse, HTTPSConnection
     from pathlib import Path
     import ssl
     import sys
@@ -440,22 +440,33 @@ CRAFTED_SENDER = textwrap.dedent(
             timeout=5,
         )
         try:
-            connection.request(
-                "POST",
-                "/v1/traces",
-                body=payload,
-                headers={
-                    "Authorization": authorization,
-                    "Content-Type": "application/x-protobuf",
-                },
+            connection.connect()
+            socket = connection.sock
+            if socket is None:
+                raise SystemExit("auth-connection-missing")
+            # The receiver rejects from headers alone. Keep the full request in
+            # one TLS write so its 401 cannot race a separate body upload.
+            wire_request = b"\r\n".join(
+                [
+                    b"POST /v1/traces HTTP/1.1",
+                    b"Host: otel-collector:4318",
+                    f"Authorization: {authorization}".encode("ascii"),
+                    b"Content-Type: application/x-protobuf",
+                    f"Content-Length: {len(payload)}".encode("ascii"),
+                    b"",
+                    payload,
+                ]
             )
-            response = connection.getresponse()
+            if len(wire_request) >= 8 * 1024:
+                raise SystemExit("auth-request-too-large")
+            socket.sendall(wire_request)
+            response = HTTPResponse(socket, method="POST")
             try:
+                response.begin()
                 status = response.status
-                response.read()
             finally:
                 response.close()
-        except OSError:
+        except (HTTPException, OSError):
             raise SystemExit("auth-transport-failed") from None
         finally:
             connection.close()
