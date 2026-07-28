@@ -93,10 +93,6 @@ jobs:
                 - ${ENV_FILE:?Set ENV_FILE to the smoke environment}
               environment:
                 OTEL_SDK_DISABLED: "true"
-                RELOAD_AGENTS: "false"
-                SERVE_WEB_INTERFACE: "false"
-              ports: !override
-                - "127.0.0.1:8080:8080"
               restart: "no"
           YAML
 
@@ -122,6 +118,13 @@ jobs:
           container_id="$("${compose[@]}" ps --all -q agent)"
           if [ -z "$container_id" ]; then
             echo "Compose did not create the agent container." >&2
+            exit 1
+          fi
+
+          published_address="$("${compose[@]}" port agent 8080)"
+          if [ "$published_address" != "127.0.0.1:8080" ]; then
+            printf 'Unexpected published address: %s\n' \
+              "$published_address" >&2
             exit 1
           fi
 

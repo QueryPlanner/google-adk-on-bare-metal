@@ -81,3 +81,43 @@ def test_private_registry_login_uses_least_privilege_stdin_contract() -> None:
     assert "classic personal access token with only `read:packages`" in document
     assert "$GITHUB_TOKEN" not in document
     assert "echo " not in login_blocks[0]
+
+
+def test_guides_document_authenticated_loopback_boundary_and_migration() -> None:
+    """Keep public ingress authenticated and existing-VM migration objective."""
+    readme = README_PATH.read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+    deployment_guide = DEPLOYMENT_GUIDE_PATH.read_text(encoding="utf-8")
+    normalized_guide = " ".join(deployment_guide.split())
+
+    assert "127.0.0.1:8080" in readme
+    assert "http://127.0.0.1:8080/docs" in readme
+    assert "SERVE_WEB_INTERFACE=true uv run python -m agent.server" in readme
+    assert "Do not open or publicly publish port 8080." in readme
+    assert "authenticated HTTPS reverse proxy" in normalized_readme
+
+    required_fragments = (
+        "## Network Security Boundary",
+        "docker compose port agent 8080",
+        "The expected output is `127.0.0.1:8080`.",
+        "authenticate the entire upstream",
+        "SSE without response buffering",
+        "WebSocket upgrades",
+        "AGENT_PUBLISH_HOST=0.0.0.0 docker compose up",
+        "It is not safe for the public internet",
+        "Docker Engine 28",
+        "DOCKER_INSECURE_NO_IPTABLES_RAW=1",
+        "allow-direct-routing",
+        "com.docker.network.bridge.trusted_host_interfaces",
+        "`routed` or `nat-unprotected` gateway modes",
+        "sudo ./setup.sh --verify-docker-version",
+        "sudo systemctl cat docker",
+        "sudo systemctl show docker --property=Environment",
+        "## Existing VM Migration",
+        "SERVE_WEB_INTERFACE=false",
+        "RELOAD_AGENTS=false",
+        "sudo ss -ltnp | grep '127.0.0.1:8080'",
+        "sudo ufw delete allow 8080/tcp",
+    )
+    for fragment in required_fragments:
+        assert fragment in normalized_guide

@@ -7,7 +7,9 @@ You can deploy this Agent Platform using **Docker** (easiest compatibility) or *
 To prepare a fresh Ubuntu/Debian server for production, run the included `setup.sh` script. This script automates:
 1.  **System Updates**: Ensures the OS is patched.
 2.  **Dependencies**: Installs Docker, Docker Compose, Git, UFW, and Fail2Ban.
-3.  **Security**: Configures a basic firewall (UFW) allowing SSH (22), HTTP (80/443), and the Agent port (8080).
+3.  **Security**: Configures a basic firewall (UFW) allowing SSH and ports
+    80/443 for an operator-supplied authenticated reverse proxy. It does not
+    configure that proxy or open the agent's unauthenticated port 8080.
 4.  **Log Rotation**: Prevents Docker logs from filling up the disk.
 5.  **Dedicated User**: Creates an `agent-runner` user for secure operation.
 
@@ -30,6 +32,9 @@ sudo ./setup.sh
 2.  **OpenRouter or Google API Key**.
 3.  **AGENT_NAME**: A unique identifier for your agent service.
 4.  **Server**: A Linux server (Ubuntu/Debian recommended).
+5.  **Docker Engine 28+ (Docker method only)**: Required when loopback port
+    publishing is the isolation boundary. Older releases had a documented
+    local-network reachability issue for localhost-published ports.
 
 ---
 
@@ -97,6 +102,66 @@ healthy; `--wait-timeout` prevents an unhealthy startup from hanging automation
 indefinitely. When `DATABASE_URL` is configured, the entrypoint first runs a
 bounded `SELECT 1` readiness check before starting the server.
 
+## Network Security Boundary
+
+The process listens on `0.0.0.0:8080` inside its container so Docker can reach
+it. Compose separately publishes that port on `127.0.0.1:8080` on the VM. The
+host-side address is the intended security boundary; verify it after every
+deployment:
+
+```bash
+docker compose port agent 8080
+```
+
+The expected output is `127.0.0.1:8080`. The default environment also disables
+the ADK development web interface and agent reload.
+
+This boundary requires Docker Engine 28+ with Docker's normal bridge/NAT packet
+filtering intact. Do not set `DOCKER_INSECURE_NO_IPTABLES_RAW=1`, enable the
+daemon's `allow-direct-routing` option, configure
+`com.docker.network.bridge.trusted_host_interfaces`, or use `routed` or
+`nat-unprotected` gateway modes. Those non-default settings can make the
+container address remotely reachable even when the host publication reports
+`127.0.0.1`. If the VM needs direct container routing, enforce the boundary with
+an independently managed host or network firewall instead of relying on this
+Compose port mapping.
+
+These settings are not application authentication. Headless ADK still exposes
+run, streaming, WebSocket, session, artifact, trace, documentation, and
+evaluation routes. For public access, terminate TLS on port 443 and authenticate
+the entire upstream—not only `/dev-ui`. The reverse proxy must support SSE
+without response buffering and WebSocket upgrades. It must overwrite
+client-supplied forwarding headers and the upstream must trust those headers
+only from the proxy. Configuring a particular proxy, DNS, and certificates is a
+separate deployment decision.
+
+For temporary browser access, enable the development UI explicitly on the VM:
+
+```bash
+SERVE_WEB_INTERFACE=true docker compose up --build --wait --wait-timeout 180
+```
+
+Then create a tunnel from your computer rather than publishing the service:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 your-user@your-vm
+```
+
+Open `http://127.0.0.1:8080` on your computer.
+
+> [!CAUTION]
+> The following escape hatch publishes the unauthenticated ADK service on every
+> host interface. It is not safe for the public internet, does not provide TLS,
+> and is not made safe by UFW alone because Docker manages its own packet
+> filtering rules.
+>
+> ```bash
+> AGENT_PUBLISH_HOST=0.0.0.0 docker compose up --build --wait --wait-timeout 180
+> ```
+>
+> Prefer a specific private interface or private network when loopback cannot be
+> used.
+
 ---
 
 ## Option 2: Bare Metal (Lowest Resources)
@@ -127,6 +192,7 @@ uv sync
 # Configure Env
 cp .env.example .env
 # Edit .env with your real keys!
+# Keep HOST=127.0.0.1, SERVE_WEB_INTERFACE=false, and RELOAD_AGENTS=false.
 ```
 
 ### 3. Setup Systemd (Keep it running)
@@ -145,6 +211,74 @@ cp .env.example .env
 sudo systemctl status agent
 sudo journalctl -u agent -f
 ```
+
+## Existing VM Migration
+
+Earlier versions published port 8080 on all interfaces, enabled the development
+UI and reload, and added an allow rule for 8080 to UFW. Pulling this change does
+not rewrite an existing `.env`, recreate a running container, or remove
+operator-owned firewall policy.
+
+1. Upgrade to Docker Engine 28 or later and verify the server version. The setup
+   script fails instead of upgrading an existing Docker installation:
+
+   ```bash
+   sudo ./setup.sh --verify-docker-version
+   docker version --format '{{.Server.Version}}'
+   ```
+
+2. Audit `/etc/docker/daemon.json`, Docker's systemd unit and drop-ins, and the
+   project network. Do not rely on loopback publication when
+   `DOCKER_INSECURE_NO_IPTABLES_RAW=1`, `allow-direct-routing`, trusted host
+   interfaces, or `routed`/`nat-unprotected` gateway modes are enabled:
+
+   ```bash
+   sudo systemctl cat docker
+   sudo systemctl show docker --property=Environment
+   sudo test ! -f /etc/docker/daemon.json \
+     || sudo jq . /etc/docker/daemon.json
+   ```
+
+3. Update the existing `.env`:
+
+   ```dotenv
+   AGENT_PUBLISH_HOST=127.0.0.1
+   HOST=127.0.0.1
+   SERVE_WEB_INTERFACE=false
+   RELOAD_AGENTS=false
+   ```
+
+   Compose still overrides `HOST` to `0.0.0.0` inside its container. The
+   loopback value protects direct bare-metal/systemd runs.
+
+4. Pull and recreate the Compose service, then verify the resolved publication:
+
+   ```bash
+   git pull
+   docker compose up --build --force-recreate --wait --wait-timeout 180
+   docker compose port agent 8080
+   ```
+
+   Require the final command to report `127.0.0.1:8080`.
+
+5. For a bare-metal systemd installation, restart the service and verify the
+   listening socket:
+
+   ```bash
+   sudo systemctl restart agent
+   sudo ss -ltnp | grep '127.0.0.1:8080'
+   ```
+
+6. Inspect UFW and manually remove the legacy rule only if it belongs to this
+   deployment:
+
+   ```bash
+   sudo ufw status numbered
+   sudo ufw delete allow 8080/tcp
+   ```
+
+7. Move every remote client to the authenticated HTTPS ingress on port 443
+   before relying on the new boundary.
 
 ## Troubleshooting
 

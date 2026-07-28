@@ -9,6 +9,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+MINIMUM_DOCKER_MAJOR_VERSION=28
 
 log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%dT%H:%M:%S%z')] $1${NC}"
@@ -22,6 +23,32 @@ error() {
 warn() {
     echo -e "${YELLOW}[WARN] $1${NC}"
 }
+
+verify_docker_version() {
+    local server_version
+    local major_version
+
+    if ! server_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)"; then
+        error "Unable to query the Docker server version. Start Docker and retry."
+    fi
+
+    major_version="${server_version%%.*}"
+    if [[ ! "$major_version" =~ ^[0-9]+$ ]]; then
+        error "Unable to parse Docker server version: $server_version"
+    fi
+
+    if (( major_version < MINIMUM_DOCKER_MAJOR_VERSION )); then
+        error "Docker Engine 28+ is required; found $server_version. Upgrade Docker before continuing."
+    fi
+
+    log "Docker Engine $server_version meets the 28+ requirement."
+}
+
+# Allow operators and tests to run the security-critical version check alone.
+if [[ "${1:-}" == "--verify-docker-version" ]]; then
+    verify_docker_version
+    exit 0
+fi
 
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
@@ -57,6 +84,8 @@ else
     log "Docker already installed. Skipping..."
 fi
 
+verify_docker_version
+
 # 4. Configure Firewall (UFW)
 log "Configuring UFW firewall..."
 ufw default deny incoming
@@ -64,8 +93,6 @@ ufw default allow outgoing
 ufw allow ssh
 ufw allow 80/tcp
 ufw allow 443/tcp
-# Allow custom agent port if needed (default 8080 for agent)
-ufw allow 8080/tcp
 
 # Enable UFW non-interactively
 if ! ufw status | grep -q "Status: active"; then
