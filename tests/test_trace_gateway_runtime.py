@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import base64
 import gzip
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import textwrap
 import time
 from dataclasses import dataclass
@@ -30,6 +32,9 @@ COLLECTOR_IMAGE = (
     "sha256:f2f01157055a9b2aab9df7118e1f1c9abf345e99b23bc7a2bc791db374a7d0f6"
 )
 MINIMUM_COMPOSE_VERSION = (2, 24, 4)
+MAX_CAPTURE_BYTES = 16 * 1024 * 1024
+MAX_CAPTURE_FILES = 128
+MAX_CAPTURE_ARCHIVE_BYTES = MAX_CAPTURE_BYTES + (MAX_CAPTURE_FILES * 1024) + 10_240
 SAFE_RESOURCE_ATTRIBUTES = {
     "service.name": "google-adk-agent",
     "service.namespace": "google-adk-on-bare-metal",
@@ -168,10 +173,12 @@ CAPTURE_SERVER = textwrap.dedent(
                 ),
                 "path": self.path,
             }
-            (OUTPUT / f"{stem}.json").write_text(
+            pending_metadata = OUTPUT / f"{stem}.json.tmp"
+            pending_metadata.write_text(
                 json.dumps(metadata, sort_keys=True),
                 encoding="utf-8",
             )
+            pending_metadata.replace(OUTPUT / f"{stem}.json")
             self.send_response(200)
             self.send_header("Content-Type", "application/x-protobuf")
             self.send_header("Content-Length", "0")
@@ -573,7 +580,47 @@ CAPTURE_COUNT = textwrap.dedent(
     r"""
     from pathlib import Path
 
-    print(len(list(Path("/tmp/trace-capture").glob("*.bin"))))
+    root = Path("/tmp/trace-capture")
+    print(
+        sum(
+            metadata.with_suffix(".bin").is_file()
+            for metadata in root.glob("*.json")
+        )
+    )
+    """
+).strip()
+
+CAPTURE_ARCHIVE = textwrap.dedent(
+    rf"""
+    import io
+    from pathlib import Path
+    import re
+    import sys
+    import tarfile
+
+    root = Path("/tmp/trace-capture")
+    completed = []
+    for metadata in sorted(root.glob("*.json")):
+        if re.fullmatch(r"[0-9]{{6}}\.json", metadata.name) is None:
+            raise SystemExit("invalid-capture-name")
+        body = metadata.with_suffix(".bin")
+        if body.is_file():
+            completed.extend((body, metadata))
+
+    if not completed or len(completed) > {MAX_CAPTURE_FILES}:
+        raise SystemExit("invalid-capture-count")
+
+    payloads = [(path, path.read_bytes()) for path in completed]
+    if sum(len(payload) for _, payload in payloads) > {MAX_CAPTURE_BYTES}:
+        raise SystemExit("capture-size-exceeded")
+
+    with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
+        for path, payload in payloads:
+            member = tarfile.TarInfo(path.name)
+            member.mode = 0o600
+            member.mtime = 0
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
     """
 ).strip()
 
@@ -746,6 +793,35 @@ def _compose(
         check=check,
         timeout=timeout,
     )
+
+
+def _compose_bytes(
+    harness: GatewayHarness,
+    *arguments: str,
+    timeout: float = 180,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one exact-project Compose operation with secret-bearing stdout."""
+    command = [*harness.compose_prefix, *arguments]
+    result = subprocess.run(  # noqa: S603 - resolved tools and fixed arguments
+        command,
+        cwd=REPOSITORY_ROOT,
+        env=harness.environment,
+        text=False,
+        capture_output=True,
+        check=False,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        command_name = " ".join(command[:3])
+        stderr = _redact_output(
+            result.stderr[-4_000:].decode("utf-8", errors="replace")
+        )
+        raise AssertionError(
+            f"{command_name} failed with {result.returncode}\n"
+            "stdout omitted because it may contain captured OTLP\n"
+            f"stderr:\n{stderr}"
+        )
+    return result
 
 
 def _write_text(path: Path, contents: str, *, mode: int = 0o600) -> None:
@@ -1292,14 +1368,45 @@ def _copy_capture(
     harness: GatewayHarness,
     destination: Path,
 ) -> None:
-    """Copy one read-only snapshot out of the exact project container."""
+    """Stream one bounded snapshot out of the downstream tmpfs."""
     destination.mkdir()
-    _compose(
+    result = _compose_bytes(
         harness,
-        "cp",
-        "otel-downstream:/tmp/trace-capture/.",
-        str(destination),
+        "exec",
+        "-T",
+        "otel-downstream",
+        "python",
+        "-c",
+        CAPTURE_ARCHIVE,
     )
+    assert len(result.stdout) <= MAX_CAPTURE_ARCHIVE_BYTES
+
+    captured_names: set[str] = set()
+    total_size = 0
+    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+        members = archive.getmembers()
+        assert 0 < len(members) <= MAX_CAPTURE_FILES
+        for member in members:
+            assert member.isfile()
+            assert member.name == Path(member.name).name
+            assert re.fullmatch(r"[0-9]{6}\.(?:bin|json)", member.name)
+            assert member.name not in captured_names
+            captured_names.add(member.name)
+            assert 0 <= member.size <= MAX_CAPTURE_BYTES
+            total_size += member.size
+            assert total_size <= MAX_CAPTURE_BYTES
+
+            source = archive.extractfile(member)
+            assert source is not None
+            payload = source.read(MAX_CAPTURE_BYTES + 1)
+            assert len(payload) == member.size
+            (destination / member.name).write_bytes(payload)
+
+    binary_stems = {Path(name).stem for name in captured_names if name.endswith(".bin")}
+    metadata_stems = {
+        Path(name).stem for name in captured_names if name.endswith(".json")
+    }
+    assert binary_stems == metadata_stems
 
 
 def _decode_capture(
