@@ -617,7 +617,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.40.3,<3.0.0" },
     { name = "google-cloud-logging", specifier = ">=3.12.1,<4.0.0" },
     { name = "greenlet", specifier = ">=3.0.0" },
-    { name = "langfuse", specifier = ">=3.12.0" },
+    { name = "langfuse", specifier = ">=4.14.1" },
     { name = "litellm", specifier = ">=1.60.0" },
     { name = "mem0ai", specifier = ">=0.1.0" },
     { name = "openinference-instrumentation-google-adk", specifier = ">=0.1.8" },
@@ -1524,23 +1524,21 @@ wheels = [
 
 [[package]]
 name = "langfuse"
-version = "3.12.0"
+version = "4.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
     { name = "httpx" },
-    { name = "openai" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "packaging" },
     { name = "pydantic" },
-    { name = "requests" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/05/d2/33991342653d101715faae8f82c14eb3f0a5c2d22d8c99df9dbb8d099802/langfuse-3.12.0.tar.gz", hash = "sha256:0f75b3d21d4ef4014ebeaa8188eb0c855200412b4e4fb8cceca609a7ce465f91", size = 232651, upload-time = "2026-01-13T14:17:33.659Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/61/bb7fa00f5334a670c9aae1f053bc725654a0ca5435fa17d0cb103df8c978/langfuse-4.14.1.tar.gz", hash = "sha256:576641820ae79aeca71453c8eff3c8c35d53f7e41729c918f59eb81f7499faf9", size = 381977, upload-time = "2026-07-20T08:44:04.669Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/87/141689c2c2b352ed100de4a63f64f24b4df7f883ba2a3fc0c6733d9d0451/langfuse-3.12.0-py3-none-any.whl", hash = "sha256:644d9bbfa842eb6775b1e069e23f77ad1087f5241682966b8168bbb01f9c357e", size = 416875, upload-time = "2026-01-13T14:17:31.791Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/e4/6c305af16f1ce344271dd829383b7af586530cf60b55af1aaf274ca37ba9/langfuse-4.14.1-py3-none-any.whl", hash = "sha256:07d19f16338b8e21f8e5996b7e6c3ed150ee582fbaa6275ac9eeea297093f4be", size = 669448, upload-time = "2026-07-20T08:44:05.682Z" },
 ]
 
 [[package]]
