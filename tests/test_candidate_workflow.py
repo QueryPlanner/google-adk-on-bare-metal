@@ -186,6 +186,8 @@ def test_candidate_unhealthy_proof_checks_the_exact_running_contract() -> None:
     assert "unhealthy_container_id = _container_id(" in runtime_source
     assert "expected_command=UNHEALTHY_COMMAND" in runtime_source
     assert 'expected_health_status="unhealthy"' in runtime_source
+    assert 'build_arguments=(f"BASE_IMAGE={healthy_tag}",)' in runtime_source
+    assert 'build_arguments=(f"BASE_IMAGE={healthy_image_id}",)' not in runtime_source
     for inspected_field in (
         "{{.Image}}",
         "{{.Config.User}}",

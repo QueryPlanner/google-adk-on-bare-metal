@@ -876,7 +876,7 @@ def test_candidate_runtime_is_isolated_and_fail_closed(tmp_path: Path) -> None:
             dockerfile=unhealthy_dockerfile,
             iid_file=private_directory / "unhealthy.iid",
             tag=unhealthy_tag,
-            build_arguments=(f"BASE_IMAGE={healthy_image_id}",),
+            build_arguments=(f"BASE_IMAGE={healthy_tag}",),
         )
         created_resources.append([docker, "image", "rm", unhealthy_tag])
 
