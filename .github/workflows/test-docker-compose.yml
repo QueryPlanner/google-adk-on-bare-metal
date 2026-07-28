@@ -417,8 +417,18 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked
 
-      - name: Run atomic promotion and rollback proof
-        run: uv run pytest tests/test_deployment_promotion_runtime.py -q
+      - name: Run candidate isolation, promotion, and rollback proof
+        env:
+          PYTEST_ADDOPTS: ""
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTEST_PLUGINS: ""
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          uv run --locked --no-sync pytest
+          --noconftest --confcutdir=tests
+          -o addopts= -p no:cacheprovider
+          tests/test_deployment_promotion_runtime.py::test_real_docker_promotes_then_restores_exact_verified_baseline
+          -q --tb=line --disable-warnings --show-capture=no
 
   trace-gateway:
     name: Validate trace-redaction gateway
