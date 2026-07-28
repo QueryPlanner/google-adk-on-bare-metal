@@ -73,6 +73,24 @@ following bounds:
 - **Default:** The installed `src` directory detected by the server
 - **Purpose:** Directory containing ADK agent packages
 
+The server resolves this directory to an absolute path and always stores local
+artifacts beneath `<AGENT_DIR>/.adk/artifacts`; there is no separate artifact
+directory setting. Dedicate that root to one ADK application and use one writer
+at a time for each `user_id`/`session_id`/`filename` key.
+
+Compose pins `AGENT_DIR` to `/app/src`, and the trusted `agent_artifacts` named
+volume is mounted at `/app/src/.adk`. For direct or systemd execution, the
+service account must be able to create, write, sync, and remove files beneath
+the resolved `.adk` directory. Directory and file modes follow the process
+umask; ownership, permissions, umask, capacity, retention, encryption, and
+backups are operator responsibilities.
+
+The filesystem backend retains artifacts across normal process or container
+recreation only. It does not provide crash consistency, application
+authentication, quotas, retention, encryption, or backup automation. Treat the
+artifact root as trusted application data. `docker compose down --volumes`
+permanently deletes the Compose artifact volume.
+
 **ROOT_AGENT_MODEL**
 - **When:** Optional
 - **Default:** `gemini-2.5-flash`

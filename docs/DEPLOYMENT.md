@@ -102,6 +102,70 @@ healthy; `--wait-timeout` prevents an unhealthy startup from hanging automation
 indefinitely. When `DATABASE_URL` is configured, the entrypoint first runs a
 bounded `SELECT 1` readiness check before starting the server.
 
+## Artifact Storage Contract
+
+The local artifact root is not independently configurable. It is always
+`<AGENT_DIR>/.adk/artifacts`, where `AGENT_DIR` is resolved to an absolute
+directory at startup. The image and Compose service pin `AGENT_DIR` to
+`/app/src`, and Compose mounts the `agent_artifacts` named volume at
+`/app/src/.adk`. As a result, the artifact payload and metadata files under
+`/app/src/.adk/artifacts` survive normal process restarts and agent-container
+recreation. PostgreSQL remains the separate session store.
+
+Startup creates the artifact directory when needed and probes create, write,
+flush, sync, unlink, and directory-cleanup access before serving `/health`. If
+the directory is unusable, startup exits non-zero and reports the stable public
+message `Artifact storage is unavailable.` It does not silently select
+in-memory artifact storage.
+
+The supported server entrypoints are `python -m agent.server` and
+`uv run server`. Use one of those entrypoints so `main()` can enforce the
+sanitized startup-failure contract. The server intentionally no longer creates
+a module-global `app`, so the older `uvicorn agent.server:app` target is not
+supported. Invoking `create_app` directly through an external Uvicorn factory
+also bypasses the sanitized command boundary and is not a supported deployment
+entrypoint.
+
+Operate the filesystem backend within these boundaries:
+
+- Dedicate one artifact root to one ADK application. The filesystem key does
+  not include the application name.
+- Use one writer at a time for each
+  `user_id`/`session_id`/`filename` key. Concurrent version allocation for the
+  same key is not locked.
+- Expect persistence only across normal process or container recreation.
+  Payload and metadata files are written directly, so the template does not
+  claim power-loss safety or crash consistency.
+- Treat the startup probe as a point-in-time check. It does not reserve
+  capacity, lock the path against a trusted local actor, or prevent later
+  permission and storage failures.
+- Supply application authentication at the trusted ingress. Artifact storage
+  adds no authentication, quotas, retention, encryption, or backup automation.
+- Treat the artifact volume as trusted application data. Do not grant untrusted
+  users host or volume write access.
+- Set an appropriate process umask and filesystem ownership. ADK creates
+  directories and files according to that umask; owner-only modes are not
+  guaranteed by the template.
+
+For the provided image, the runtime user and group have UID/GID 1000. Docker
+initializes the named volume from the image-owned `/app/src/.adk` directory.
+For a bare-metal or operator-supplied bind mount, ensure the service account can
+create and remove files beneath `<AGENT_DIR>/.adk` before starting the service.
+The operator is responsible for host ownership, permissions, umask, capacity,
+monitoring, and backups.
+
+`docker compose down` removes containers and networks but retains the named
+artifact volume. The following variant is destructive:
+
+```bash
+docker compose down --volumes
+```
+
+It permanently removes this Compose project's `agent_artifacts` volume and all
+stored artifacts. There is no automated backup or restore workflow. Quiesce the
+single writer before taking an operator-managed volume snapshot or copy; a live
+copy is not promised to be crash-consistent.
+
 ## Network Security Boundary
 
 The process listens on `0.0.0.0:8080` inside its container so Docker can reach
@@ -283,10 +347,17 @@ operator-owned firewall policy.
 ## Troubleshooting
 
 ### Permission Errors with Artifacts
-If you encounter `PermissionError: [Errno 13] Permission denied: '/app/src/.adk'` when running with Docker:
-1.  This usually happens because the container user (UID 1000) cannot write to the host volume mounted at `./src`.
-2.  **Fix:** Ensure you have rebuilt the image to include the latest permission fixes:
-    ```bash
-    docker compose up -d --build
-    ```
-3.  If that fails, ensure your host user has UID 1000 (run `id -u`).
+
+When startup reports `Artifact storage is unavailable.`, inspect only bounded
+diagnostics and the resolved volume:
+
+```bash
+docker compose logs --no-color --tail=200 agent
+docker volume inspect YOUR_COMPOSE_PROJECT_agent_artifacts
+```
+
+Confirm that the selected volume or bind mount is trusted, has free space, and
+allows the service UID/GID to create, sync, and remove files beneath
+`<AGENT_DIR>/.adk`. Rebuilding the image does not repair ownership or a
+read-only operator-supplied mount. Do not delete the named volume as a
+permission fix; `docker compose down --volumes` destroys all stored artifacts.
