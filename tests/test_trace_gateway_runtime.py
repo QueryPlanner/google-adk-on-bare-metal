@@ -198,7 +198,7 @@ CRAFTED_SENDER = textwrap.dedent(
     from __future__ import annotations
 
     import os
-    from http.client import HTTPException, HTTPResponse, HTTPSConnection
+    from http.client import HTTPException, HTTPSConnection
     from pathlib import Path
     import ssl
     import sys
@@ -440,29 +440,22 @@ CRAFTED_SENDER = textwrap.dedent(
             timeout=5,
         )
         try:
-            connection.connect()
-            socket = connection.sock
-            if socket is None:
-                raise SystemExit("auth-connection-missing")
-            # The receiver rejects from headers alone. Keep the full request in
-            # one TLS write so its 401 cannot race a separate body upload.
-            wire_request = b"\r\n".join(
-                [
-                    b"POST /v1/traces HTTP/1.1",
-                    b"Host: otel-collector:4318",
-                    f"Authorization: {authorization}".encode("ascii"),
-                    b"Content-Type: application/x-protobuf",
-                    f"Content-Length: {len(payload)}".encode("ascii"),
-                    b"",
-                    payload,
-                ]
+            # An empty protobuf message is a valid OTLP request. If the invalid
+            # token were accepted, this would return 200 instead of 401.
+            auth_payload = ExportTraceServiceRequest().SerializeToString()
+            if auth_payload != b"":
+                raise SystemExit("empty-otlp-precondition-failed")
+            connection.request(
+                "POST",
+                "/v1/traces",
+                body=auth_payload,
+                headers={
+                    "Authorization": authorization,
+                    "Content-Type": "application/x-protobuf",
+                },
             )
-            if len(wire_request) >= 8 * 1024:
-                raise SystemExit("auth-request-too-large")
-            socket.sendall(wire_request)
-            response = HTTPResponse(socket, method="POST")
+            response = connection.getresponse()
             try:
-                response.begin()
                 status = response.status
             finally:
                 response.close()
