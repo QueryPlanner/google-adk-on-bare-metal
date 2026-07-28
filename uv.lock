@@ -604,6 +604,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "types-grpcio" },
 ]
@@ -636,6 +637,7 @@ dev = [
     { name = "pytest", specifier = ">=8.3.4,<9.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0,<2.0.0" },
     { name = "pytest-cov", specifier = ">=7.0.0,<8.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7.0.0" },
     { name = "ruff", specifier = ">=0.12.7,<1.0.0" },
     { name = "types-grpcio", specifier = ">=1.0.0.20251009,<2.0.0.0" },
 ]

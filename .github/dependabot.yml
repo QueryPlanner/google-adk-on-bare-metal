@@ -1,0 +1,38 @@
+version: 2
+
+# These limits apply to version-update pull requests only.
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 4
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(deps)"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+    exclude-paths:
+      - "compose.yaml"
+    commit-message:
+      prefix: "build(deps)"
+
+  # Dormant while compose.yaml uses the unversioned ${IMAGE:-agent} reference.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "build(deps)"
