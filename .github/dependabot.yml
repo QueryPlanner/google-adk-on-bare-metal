@@ -13,6 +13,11 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # Remove when the supported LiteLLM range no longer pins Pydantic to 2.12.5.
+      - dependency-name: "pydantic"
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"
       - dependency-name: "opentelemetry-exporter-gcp-logging"
         update-types:
           - "version-update:semver-minor"

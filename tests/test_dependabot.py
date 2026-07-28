@@ -29,6 +29,13 @@ EXPECTED_IGNORES = {
             "update-types": ["version-update:semver-major"],
         },
         {
+            "dependency-name": "pydantic",
+            "update-types": [
+                "version-update:semver-patch",
+                "version-update:semver-minor",
+            ],
+        },
+        {
             "dependency-name": "opentelemetry-exporter-gcp-logging",
             "update-types": ["version-update:semver-minor"],
         },
@@ -227,6 +234,14 @@ def test_ignore_policy_is_narrow_and_version_only() -> None:
     }
     assert "google-adk" not in uv_dependency_names
     assert "opentelemetry-*" not in uv_dependency_names
+    uv_ignores_by_dependency = {
+        condition["dependency-name"]: set(condition["update-types"])
+        for condition in EXPECTED_IGNORES[("uv", "/")]
+    }
+    assert (
+        uv_ignores_by_dependency["*"] | uv_ignores_by_dependency["pydantic"]
+        == SUPPORTED_UPDATE_TYPES
+    )
     assert "versions" not in {
         key
         for conditions in EXPECTED_IGNORES.values()
@@ -288,3 +303,39 @@ def test_configuration_targets_real_supported_manifests() -> None:
         "Dormant while compose.yaml uses the unversioned ${IMAGE:-agent}"
         in dependabot_document
     )
+    assert (
+        "Remove when the supported LiteLLM range no longer pins "
+        "Pydantic to 2.12.5." in dependabot_document
+    )
+
+
+def test_pydantic_constraint_matches_locked_litellm_compatibility() -> None:
+    """Keep the direct constraint truthful without changing resolved runtime code."""
+    project = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    assert "pydantic==2.12.5" in project["project"]["dependencies"]
+
+    lockfile = tomllib.loads(LOCKFILE_PATH.read_text(encoding="utf-8"))
+    packages = lockfile["package"]
+    root_package = next(
+        package for package in packages if package["name"] == "google-adk-on-bare-metal"
+    )
+    pydantic_requirement = next(
+        requirement
+        for requirement in root_package["metadata"]["requires-dist"]
+        if requirement["name"] == "pydantic"
+    )
+    assert pydantic_requirement == {
+        "name": "pydantic",
+        "specifier": "==2.12.5",
+    }
+
+    resolved_versions = {
+        package["name"]: package["version"]
+        for package in packages
+        if package["name"] in {"google-adk", "litellm", "pydantic"}
+    }
+    assert resolved_versions == {
+        "google-adk": "1.36.2",
+        "litellm": "1.83.14",
+        "pydantic": "2.12.5",
+    }
