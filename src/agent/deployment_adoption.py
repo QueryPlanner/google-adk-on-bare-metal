@@ -25,6 +25,13 @@ _IMAGE_REFERENCE = re.compile(
 )
 _GITHUB_ORIGIN = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _MAX_OUTPUT_BYTES = 256 * 1024
+_HOST_ENVIRONMENT_NAMES = (
+    "HOME",
+    "PATH",
+    "DOCKER_CONFIG",
+    "DOCKER_HOST",
+    "XDG_RUNTIME_DIR",
+)
 
 
 class DeploymentAdoptionError(RuntimeError):
@@ -74,12 +81,19 @@ def _command_environment(
 ) -> dict[str, str]:
     source = os.environ if environment is None else environment
     selected = {
-        key: value
-        for key, value in source.items()
-        if not key.startswith("GIT_") and key not in {"LC_ALL", "LANG"}
+        name: source[name] for name in _HOST_ENVIRONMENT_NAMES if name in source
     }
     selected.update(
         {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_KEY_1": "core.fsmonitor",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_CONFIG_VALUE_0": "/dev/null",
+            "GIT_CONFIG_VALUE_1": "false",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
             "LC_ALL": "C",
@@ -231,8 +245,25 @@ def _git_facts(
         raise DeploymentAdoptionError("legacy checkout origin does not match")
 
     for arguments in (
-        ["-C", str(checkout), "diff", "--quiet", "--"],
-        ["-C", str(checkout), "diff", "--cached", "--quiet", "--"],
+        [
+            "-C",
+            str(checkout),
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--quiet",
+            "--",
+        ],
+        [
+            "-C",
+            str(checkout),
+            "diff",
+            "--cached",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--quiet",
+            "--",
+        ],
     ):
         result = _run(
             git,

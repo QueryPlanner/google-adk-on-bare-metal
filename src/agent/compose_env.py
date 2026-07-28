@@ -51,6 +51,61 @@ def serialize_compose_environment(
     return "\n".join(lines) + "\n"
 
 
+def parse_compose_environment(
+    payload: str,
+    names: Sequence[str],
+) -> dict[str, str]:
+    """Invert the canonical serializer for one exact ordered allowlist."""
+    if not names:
+        raise ComposeEnvironmentError("at least one environment key is required")
+
+    seen_names: set[str] = set()
+    for name in names:
+        if _ENVIRONMENT_KEY.fullmatch(name) is None:
+            raise ComposeEnvironmentError("environment key is invalid")
+        if name in seen_names:
+            raise ComposeEnvironmentError(f"environment key is duplicated: {name}")
+        seen_names.add(name)
+
+    if not payload.endswith("\n") or "\0" in payload or "\r" in payload:
+        raise ComposeEnvironmentError("serialized environment is invalid")
+    lines = payload.split("\n")
+    if len(lines) != len(names) + 1:
+        raise ComposeEnvironmentError("serialized environment is invalid")
+
+    environment: dict[str, str] = {}
+    for name, line in zip(names, lines[:-1], strict=True):
+        prefix = f'{name}="'
+        if not line.startswith(prefix) or not line.endswith('"'):
+            raise ComposeEnvironmentError("serialized environment is invalid")
+
+        encoded = line[len(prefix) : -1]
+        decoded: list[str] = []
+        index = 0
+        while index < len(encoded):
+            character = encoded[index]
+            if character == "\\":
+                index += 1
+                if index >= len(encoded):
+                    raise ComposeEnvironmentError("serialized environment is invalid")
+                decoded.append(encoded[index])
+            elif character == "$":
+                index += 1
+                if index >= len(encoded) or encoded[index] != "$":
+                    raise ComposeEnvironmentError("serialized environment is invalid")
+                decoded.append("$")
+            elif character == '"':
+                raise ComposeEnvironmentError("serialized environment is invalid")
+            else:
+                decoded.append(character)
+            index += 1
+        environment[name] = "".join(decoded)
+
+    if serialize_compose_environment(names, environment) != payload:
+        raise ComposeEnvironmentError("serialized environment is invalid")
+    return environment
+
+
 def write_compose_environment(
     path: Path,
     names: Sequence[str],

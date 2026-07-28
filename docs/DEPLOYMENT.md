@@ -56,6 +56,39 @@ verifies both the running digest-qualified image reference and the image's OCI
 revision label. The immutable image reference is also written to the Docker
 Publish workflow summary.
 
+### Automated VM deployment prerequisites
+
+The manual production job requires `python3` version 3.13, Git, Docker with the
+Compose plugin, and the util-linux `flock` command on the VM. Run SSH under a
+dedicated deployment account whose home owns the checkout and deployment state.
+That account must not have an SSH `ForceCommand`, `~/.ssh/rc`, or shell startup
+customization that reads command standard input: the second SSH connection
+streams the canonical production environment directly to the detached
+controller.
+
+Store the exact SHA256 fingerprint of the VM host key in
+`SERVER_HOST_FINGERPRINT`. The workflow uses a private identity file, ignores
+ambient SSH configuration, and accepts exactly one scanned host key with that
+fingerprint. Production values are serialized in a private runner file and are
+never placed in the remote command, bootstrap script, or command arguments.
+
+An existing checkout's `.env` must be an owner-held, single-link, non-empty
+regular file with mode `0600`. The deployment checks this before cloning,
+fetching, or creating a release worktree. If it reports the actionable
+migration error, run the exact command it prints on the VM, for example:
+
+```bash
+chmod 600 "$HOME/google-adk-on-bare-metal/.env"
+```
+
+The workflow streams the tracked `scripts/deployment_bootstrap.sh` and
+`scripts/deployment_cleanup.sh` bytes from the exact workflow commit. A
+transport timeout or SSH status 255 is ambiguous: the workflow deliberately
+checks the run-scoped lease before cleanup. A held lease preserves the release;
+a free lease permits removal only after the ownership marker, detached commit,
+and exact-clean worktree all match. Inspect the VM process and deployment
+journal before removing any residual release manually.
+
 ### Using GHCR Images
 
 Instead of building locally, you can run the image published by your
