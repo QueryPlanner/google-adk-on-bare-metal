@@ -198,6 +198,7 @@ CRAFTED_SENDER = textwrap.dedent(
     from __future__ import annotations
 
     import os
+    from http.client import HTTPSConnection
     from pathlib import Path
     import ssl
     import sys
@@ -431,6 +432,38 @@ CRAFTED_SENDER = textwrap.dedent(
         )
     )
 
+    if mode == "wrong-token":
+        connection = HTTPSConnection(
+            "otel-collector",
+            4318,
+            context=context,
+            timeout=5,
+        )
+        try:
+            connection.request(
+                "POST",
+                "/v1/traces",
+                body=payload,
+                headers={
+                    "Authorization": authorization,
+                    "Content-Type": "application/x-protobuf",
+                },
+            )
+            response = connection.getresponse()
+            try:
+                status = response.status
+                response.read()
+            finally:
+                response.close()
+        except OSError:
+            raise SystemExit("auth-transport-failed") from None
+        finally:
+            connection.close()
+        if status != 401:
+            raise SystemExit("unexpected-auth-status")
+        print("auth-rejected")
+        raise SystemExit(0)
+
     try:
         opener = build_opener(
             ProxyHandler({}),
@@ -438,10 +471,7 @@ CRAFTED_SENDER = textwrap.dedent(
         )
         with opener.open(request, timeout=5) as response:
             status = response.status
-    except HTTPError as error:
-        if mode == "wrong-token" and error.code == 401:
-            print("auth-rejected")
-            raise SystemExit(0) from None
+    except HTTPError:
         raise SystemExit("unexpected-http-result") from None
     except URLError as error:
         reason = str(error.reason)
@@ -1580,6 +1610,12 @@ def test_real_gateway_rejects_and_redacts_otlp(tmp_path: Path) -> None:
             environment={"CANARY_MODE": "wrong-token"},
         )
         assert wrong_token.stdout.strip() == "auth-rejected"
+        _wait_for_agent_script(
+            harness,
+            GATEWAY_HEALTH_PROBE,
+            "gateway-ready",
+            timeout=15,
+        )
         assert _wait_for_stable_capture_count(harness) == baseline_count
 
         crafted = _exec_agent_script(
