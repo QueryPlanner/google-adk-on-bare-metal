@@ -773,9 +773,12 @@ def _generate_server_certificate(
         extension,
         "\n".join(
             [
+                "basicConstraints=critical,CA:FALSE",
                 f"subjectAltName=DNS:{common_name}",
                 "extendedKeyUsage=serverAuth",
-                "keyUsage=digitalSignature,keyEncipherment",
+                "keyUsage=critical,digitalSignature,keyEncipherment",
+                "subjectKeyIdentifier=hash",
+                "authorityKeyIdentifier=keyid,issuer",
             ]
         ),
     )
@@ -820,6 +823,21 @@ def _generate_server_certificate(
             "-extfile",
             str(extension),
             "-out",
+            str(certificate),
+        ],
+        environment=environment,
+    )
+    _run(
+        [
+            openssl,
+            "verify",
+            "-x509_strict",
+            "-CAfile",
+            str(ca_certificate),
+            "-purpose",
+            "sslserver",
+            "-verify_hostname",
+            common_name,
             str(certificate),
         ],
         environment=environment,
@@ -881,6 +899,12 @@ def _make_harness(tmp_path: Path) -> GatewayHarness:
             str(ca_key),
             "-subj",
             "/CN=trace-gateway-runtime-ca",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+            "-addext",
+            "subjectKeyIdentifier=hash",
             "-out",
             str(ca_certificate),
         ],
