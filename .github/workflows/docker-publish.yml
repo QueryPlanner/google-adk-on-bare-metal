@@ -3,7 +3,7 @@ name: Docker Publish
 on:
   push:
     branches: [ "main" ]
-    tags: [ 'v*.*.*' ]
+    tags: [ "v*.*.*" ]
   workflow_dispatch:
     inputs:
       deploy:
@@ -16,14 +16,12 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # 1. Run Code Quality First
   quality:
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/code-quality.yml
 
-  # 2. Build and Push after Quality passes
   build:
     needs: quality
     runs-on: ubuntu-latest
@@ -35,21 +33,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Downcase IMAGE_NAME
         run: |
           echo "IMAGE_NAME=${GITHUB_REPOSITORY@L}" >> "${GITHUB_ENV}"
 
-      # Multi-platform support (qemu + buildx)
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -57,7 +54,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -68,18 +65,16 @@ jobs:
 
       - name: Build and push Docker image
         id: build-push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           push: true
-          # Multi-platform builds for Bare Metal (ARM64 for Pis, AMD64 for Cloud)
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: |
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          # Borrowed high-perf caching
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -98,17 +93,31 @@ jobs:
       github.ref == 'refs/heads/main' &&
       inputs.deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    env:
+      DEPLOY_SHA: ${{ github.sha }}
+      IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+      DEPLOY_RUN_ID: "${{ github.run_id }}"
+      DEPLOY_RUN_ATTEMPT: "${{ github.run_attempt }}"
     concurrency:
       group: production-deployment
       cancel-in-progress: false
-      queue: max
+
     steps:
-      - name: Validate deployment provenance
-        env:
-          DEPLOY_SHA: ${{ github.sha }}
-          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+      - name: Checkout deployment revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare private deployment transport
+        id: transport
         run: |
-          set -eu
+          set -euo pipefail
+          umask 077
 
           if [ "${#DEPLOY_SHA}" -ne 40 ]; then
             echo "ERROR: Invalid deployment commit."
@@ -120,7 +129,6 @@ jobs:
               exit 1
               ;;
           esac
-
           case "$IMAGE_DIGEST" in
             sha256:*) ;;
             *)
@@ -139,174 +147,343 @@ jobs:
               exit 1
               ;;
           esac
+          for RUN_VALUE in "$DEPLOY_RUN_ID" "$DEPLOY_RUN_ATTEMPT"; do
+            case "$RUN_VALUE" in
+              ""|*[!0123456789]*)
+                echo "ERROR: Invalid deployment run identity."
+                exit 1
+                ;;
+            esac
+          done
 
-      - name: Deploy to Server
-        uses: appleboy/ssh-action@v1.0.3
+          CHECKED_OUT_SHA="$(git rev-parse --verify HEAD)"
+          if [ "$CHECKED_OUT_SHA" != "$DEPLOY_SHA" ]; then
+            echo "ERROR: Deployment checkout does not match the requested commit."
+            exit 1
+          fi
+          for SOURCE_PATH in \
+            scripts/deployment_bootstrap.sh \
+            scripts/deployment_cleanup.sh \
+            src/agent/compose_env.py
+          do
+            if [ ! -f "$SOURCE_PATH" ] || [ -L "$SOURCE_PATH" ]; then
+              echo "ERROR: Deployment source file is unavailable."
+              exit 1
+            fi
+            SOURCE_ENTRY="$(git ls-tree "$DEPLOY_SHA" -- "$SOURCE_PATH")"
+            read -r SOURCE_MODE SOURCE_TYPE EXPECTED_BLOB SOURCE_NAME \
+              <<< "$SOURCE_ENTRY"
+            case "$SOURCE_MODE:$SOURCE_TYPE" in
+              100644:blob|100755:blob) ;;
+              *)
+                echo "ERROR: Deployment source file type is unsafe."
+                exit 1
+                ;;
+            esac
+            if [ "$SOURCE_NAME" != "$SOURCE_PATH" ]; then
+              echo "ERROR: Deployment source file identity is invalid."
+              exit 1
+            fi
+            ACTUAL_BLOB="$(git hash-object "$SOURCE_PATH")"
+            if [ "$EXPECTED_BLOB" != "$ACTUAL_BLOB" ]; then
+              echo "ERROR: Deployment source file does not match the commit."
+              exit 1
+            fi
+          done
+
+          TRANSPORT_DIR="$(mktemp -d "$RUNNER_TEMP/adk-deploy.XXXXXXXX")"
+          chmod 700 "$TRANSPORT_DIR"
+          printf 'directory=%s\n' "$TRANSPORT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Serialize production environment
         env:
-          DEPLOY_SHA: ${{ github.sha }}
-          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: DEPLOY_SHA,IMAGE_DIGEST
-          script: |
-            set -eu
+          TRANSPORT_DIR: ${{ steps.transport.outputs.directory }}
+          AGENT_NAME: production-agent
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ROOT_AGENT_MODEL: ${{ secrets.ROOT_AGENT_MODEL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_HOST }}
+          LOG_LEVEL: INFO
+          PORT: "8080"
+          HOST: 0.0.0.0
+        run: >-
+          python3 -I -S -B
+          "$GITHUB_WORKSPACE/src/agent/compose_env.py"
+          "$TRANSPORT_DIR/production.env"
+          AGENT_NAME
+          DATABASE_URL
+          OPENROUTER_API_KEY
+          GOOGLE_API_KEY
+          ROOT_AGENT_MODEL
+          LANGFUSE_PUBLIC_KEY
+          LANGFUSE_SECRET_KEY
+          LANGFUSE_BASE_URL
+          LOG_LEVEL
+          PORT
+          HOST
 
-            if [ "${#DEPLOY_SHA}" -ne 40 ]; then
-              echo "ERROR: Invalid deployment commit."
+      - name: Run locked transactional deployment
+        env:
+          TRANSPORT_DIR: ${{ steps.transport.outputs.directory }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST_FINGERPRINT: ${{ secrets.SERVER_HOST_FINGERPRINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          case "$SERVER_HOST" in
+            ""|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-]*)
+              echo "ERROR: Invalid deployment server host."
               exit 1
-            fi
-            case "$DEPLOY_SHA" in
-              *[!0123456789abcdef]*)
-                echo "ERROR: Invalid deployment commit."
-                exit 1
-                ;;
-            esac
-
-            case "$IMAGE_DIGEST" in
-              sha256:*) ;;
-              *)
-                echo "ERROR: Invalid image digest."
-                exit 1
-                ;;
-            esac
-            DIGEST_HEX=${IMAGE_DIGEST#sha256:}
-            if [ "${#DIGEST_HEX}" -ne 64 ]; then
-              echo "ERROR: Invalid image digest."
+              ;;
+          esac
+          case "$SERVER_USER" in
+            ""|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-]*)
+              echo "ERROR: Invalid deployment server user."
               exit 1
-            fi
-            case "$DIGEST_HEX" in
-              *[!0123456789abcdef]*)
-                echo "ERROR: Invalid image digest."
-                exit 1
-                ;;
-            esac
+              ;;
+          esac
+          case "$SERVER_HOST_FINGERPRINT" in
+            SHA256:*) ;;
+            *)
+              echo "ERROR: Invalid server host fingerprint."
+              exit 1
+              ;;
+          esac
+          FINGERPRINT_VALUE=${SERVER_HOST_FINGERPRINT#SHA256:}
+          if [ "${#FINGERPRINT_VALUE}" -ne 43 ]; then
+            echo "ERROR: Invalid server host fingerprint."
+            exit 1
+          fi
+          case "$FINGERPRINT_VALUE" in
+            *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/]*)
+              echo "ERROR: Invalid server host fingerprint."
+              exit 1
+              ;;
+          esac
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "ERROR: Deployment SSH key is unavailable."
+            exit 1
+          fi
+          case "$TRANSPORT_DIR" in
+            "$RUNNER_TEMP"/adk-deploy.*) ;;
+            *)
+              echo "ERROR: Invalid private transport directory."
+              exit 1
+              ;;
+          esac
 
-            # 1. Set dynamic project directory based on repository name
-            PROJECT_NAME="${{ github.event.repository.name }}"
-            PROJECT_DIR="$HOME/$PROJECT_NAME"
-            EXPECTED_ORIGIN="https://github.com/${{ github.repository }}"
-            IMAGE_REPOSITORY="$(
-              printf '%s' "ghcr.io/${{ github.repository }}" \
-                | tr '[:upper:]' '[:lower:]'
+          PAYLOAD_FILE="$TRANSPORT_DIR/production.env"
+          IDENTITY_FILE="$TRANSPORT_DIR/identity"
+          SCANNED_KEYS="$TRANSPORT_DIR/scanned-host-keys"
+          CANDIDATE_KEY="$TRANSPORT_DIR/candidate-host-key"
+          KNOWN_HOSTS="$TRANSPORT_DIR/known-hosts"
+          if [ ! -f "$PAYLOAD_FILE" ] \
+            || [ -L "$PAYLOAD_FILE" ] \
+            || [ "$(stat -c '%a:%u:%h' "$PAYLOAD_FILE")" != "600:$(id -u):1" ]
+          then
+            echo "ERROR: Private production payload is unsafe."
+            exit 1
+          fi
+
+          install -m 600 /dev/null "$IDENTITY_FILE"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$IDENTITY_FILE"
+          unset SSH_PRIVATE_KEY
+          ssh-keyscan -T 10 "$SERVER_HOST" > "$SCANNED_KEYS"
+          install -m 600 /dev/null "$KNOWN_HOSTS"
+          MATCHING_KEYS=0
+          while IFS= read -r HOST_KEY; do
+            printf '%s\n' "$HOST_KEY" > "$CANDIDATE_KEY"
+            OBSERVED_FINGERPRINT="$(
+              ssh-keygen -E sha256 -lf "$CANDIDATE_KEY" | awk '{print $2}'
             )"
-            IMAGE_NAME="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
-            DEPLOY_PROJECT="$(
-              printf 'adk-%s' "$PROJECT_NAME" | tr '[:upper:].' '[:lower:]-'
-            )"
+            if [ "$OBSERVED_FINGERPRINT" = "$SERVER_HOST_FINGERPRINT" ]; then
+              printf '%s\n' "$HOST_KEY" >> "$KNOWN_HOSTS"
+              MATCHING_KEYS=$((MATCHING_KEYS + 1))
+            fi
+          done < "$SCANNED_KEYS"
+          if [ "$MATCHING_KEYS" -ne 1 ]; then
+            echo "ERROR: Server host key did not match exactly once."
+            exit 1
+          fi
+          unset SERVER_HOST_FINGERPRINT
 
-            # 2. Ensure project directory exists
-            if [ -e "$PROJECT_DIR" ] && [ ! -d "$PROJECT_DIR/.git" ]; then
-              echo "ERROR: Project path exists without a Git checkout."
-              exit 1
-            fi
-            if [ ! -d "$PROJECT_DIR/.git" ]; then
-              echo "Project directory not found. Cloning..."
-              git clone https://github.com/${{ github.repository }} "$PROJECT_DIR"
-            fi
+          SSH_OPTIONS=(
+            -F /dev/null
+            -i "$IDENTITY_FILE"
+            -o BatchMode=yes
+            -o PasswordAuthentication=no
+            -o KbdInteractiveAuthentication=no
+            -o PreferredAuthentications=publickey
+            -o IdentitiesOnly=yes
+            -o IdentityAgent=none
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$KNOWN_HOSTS"
+            -o GlobalKnownHostsFile=/dev/null
+            -o VerifyHostKeyDNS=no
+            -o UpdateHostKeys=no
+            -o ForwardAgent=no
+            -o ForwardX11=no
+            -o ClearAllForwardings=yes
+            -o RequestTTY=no
+            -o ConnectTimeout=30
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=2
+            -o LogLevel=ERROR
+          )
+          REMOTE_RELEASE_READY=0
+          REMOTE_CLEANUP_ALLOWED=0
+          BOOTSTRAP_LOG="$TRANSPORT_DIR/bootstrap-status"
 
-            # 3. Navigate to the exact source revision without discarding changes
-            cd "$PROJECT_DIR"
-            ACTUAL_ORIGIN="$(git remote get-url origin)"
-            case "$ACTUAL_ORIGIN" in
-              "$EXPECTED_ORIGIN"|"$EXPECTED_ORIGIN.git") ;;
-              *)
-                echo "ERROR: Existing checkout has an unexpected origin."
-                exit 1
-                ;;
-            esac
-            if ! git diff --quiet --; then
-              echo "ERROR: Tracked worktree changes block deployment."
-              exit 1
+          cleanup_remote_release() {
+            PRIMARY_STATUS=$?
+            trap - EXIT INT TERM
+            if [ "$REMOTE_RELEASE_READY" -eq 1 ] \
+              && [ "$REMOTE_CLEANUP_ALLOWED" -eq 1 ]
+            then
+              set +e
+              timeout --signal=TERM --kill-after=15s 2m \
+                ssh "${SSH_OPTIONS[@]}" "$SERVER_USER@$SERVER_HOST" \
+                sh -s -- \
+                "$DEPLOY_SHA" \
+                "$IMAGE_DIGEST" \
+                "$DEPLOY_RUN_ID" \
+                "$DEPLOY_RUN_ATTEMPT" \
+                "${{ github.event.repository.name }}" \
+                "${{ github.repository }}" \
+                < "$GITHUB_WORKSPACE/scripts/deployment_cleanup.sh"
+              CLEANUP_STATUS=$?
+              set -e
+              if [ "$CLEANUP_STATUS" -ne 0 ]; then
+                echo "ERROR: Exact release worktree cleanup failed."
+                if [ "$PRIMARY_STATUS" -eq 0 ]; then
+                  PRIMARY_STATUS=1
+                fi
+              fi
             fi
-            if ! git diff --cached --quiet --; then
-              echo "ERROR: Staged changes block deployment."
-              exit 1
-            fi
-            git fetch --no-tags origin "$DEPLOY_SHA"
-            git checkout --detach "$DEPLOY_SHA"
-            CHECKED_OUT_SHA="$(git rev-parse --verify HEAD)"
-            if [ "$CHECKED_OUT_SHA" != "$DEPLOY_SHA" ]; then
-              echo "ERROR: Checked-out commit does not match deployment commit."
-              exit 1
-            fi
-            if ! git diff --quiet --; then
-              echo "ERROR: Checkout left tracked worktree changes."
-              exit 1
-            fi
-            if ! git diff --cached --quiet --; then
-              echo "ERROR: Checkout left staged changes."
-              exit 1
-            fi
-            if ! git ls-files --error-unmatch -- compose.yaml >/dev/null 2>&1; then
-              echo "ERROR: Deployment commit does not track compose.yaml."
-              exit 1
-            fi
+            exit "$PRIMARY_STATUS"
+          }
+          trap cleanup_remote_release EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
 
-            # 4. Inject Secrets into .env (Automated Configuration)
-            echo "Generating .env file from GitHub Secrets..."
-            cat <<'ENV_FILE' > .env
-            AGENT_NAME=production-agent
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
-            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
-            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
-            ROOT_AGENT_MODEL=${{ secrets.ROOT_AGENT_MODEL }}
-            LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}
-            LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}
-            LANGFUSE_BASE_URL=${{ secrets.LANGFUSE_HOST }}
-            LOG_LEVEL=INFO
-            PORT=8080
-            HOST=0.0.0.0
-            ENV_FILE
+          set +e
+          timeout --signal=TERM --kill-after=30s 8m \
+            ssh "${SSH_OPTIONS[@]}" "$SERVER_USER@$SERVER_HOST" \
+            sh -s -- \
+            "$DEPLOY_SHA" \
+            "$IMAGE_DIGEST" \
+            "$DEPLOY_RUN_ID" \
+            "$DEPLOY_RUN_ATTEMPT" \
+            "${{ github.event.repository.name }}" \
+            "${{ github.repository }}" \
+            < "$GITHUB_WORKSPACE/scripts/deployment_bootstrap.sh" \
+            | tee "$BOOTSTRAP_LOG"
+          BOOTSTRAP_STATUS=${PIPESTATUS[0]}
+          set -e
+          if grep -Fqx -- \
+            "BOOTSTRAP_LEASE_READY:$DEPLOY_RUN_ID:$DEPLOY_RUN_ATTEMPT" \
+            "$BOOTSTRAP_LOG"
+          then
+            REMOTE_RELEASE_READY=1
+            REMOTE_CLEANUP_ALLOWED=1
+          fi
+          case "$BOOTSTRAP_STATUS" in
+            0)
+              REMOTE_RELEASE_READY=1
+              REMOTE_CLEANUP_ALLOWED=1
+              ;;
+            124|137|143|255)
+              echo "ERROR: Bootstrap transport ended ambiguously; checking the lease."
+              exit "$BOOTSTRAP_STATUS"
+              ;;
+            *)
+              exit "$BOOTSTRAP_STATUS"
+              ;;
+          esac
 
-            # 5. Deploy with dynamic image
-            export IMAGE="$IMAGE_NAME"
-            CONFIGURED_IMAGE="$(
-              docker compose --project-name "$DEPLOY_PROJECT" \
-                --env-file .env -f compose.yaml config --images
+          PROJECT_NAME="${{ github.event.repository.name }}"
+          PROJECT_SLUG="$(
+            printf '%s' "$PROJECT_NAME" | tr '[:upper:].' '[:lower:]-'
+          )"
+          if [ "${#PROJECT_SLUG}" -gt 45 ]; then
+            PROJECT_HASH="$(
+              printf '%s' "$PROJECT_NAME" | sha256sum | cut -c1-8
             )"
-            if [ "$CONFIGURED_IMAGE" != "$IMAGE_NAME" ]; then
-              echo "ERROR: Compose image does not match the deployment digest."
-              exit 1
-            fi
-            docker compose --project-name "$DEPLOY_PROJECT" \
-              --env-file .env -f compose.yaml pull agent
-            docker compose --project-name "$DEPLOY_PROJECT" \
-              --env-file .env -f compose.yaml \
-              up --no-build --wait --wait-timeout 180 agent
+            PROJECT_SLUG="$(printf '%.45s-%s' "$PROJECT_SLUG" "$PROJECT_HASH")"
+          fi
+          IMAGE_REPOSITORY="$(
+            printf '%s' "ghcr.io/${{ github.repository }}" \
+              | tr '[:upper:]' '[:lower:]'
+          )"
+          CONTROLLER_COMMAND="set -eu
+          PHYSICAL_HOME=\"\$(cd \"\$HOME\" && pwd -P)\"
+          exec env -i \
+          \"HOME=\$PHYSICAL_HOME\" \
+          \"PATH=\$PATH\" \
+          LANG=C \
+          LC_ALL=C \
+          GIT_NO_REPLACE_OBJECTS=1 \
+          \"DOCKER_CONFIG=\${DOCKER_CONFIG-}\" \
+          \"DOCKER_HOST=\${DOCKER_HOST-}\" \
+          \"XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR-}\" \
+          python3 -I -S -B \
+          -c 'import runpy, sys; source = sys.argv.pop(1); sys.path.insert(0, source); runpy.run_module(\"agent.deployment_promotion\", run_name=\"__main__\", alter_sys=True)' \
+          \"\$PHYSICAL_HOME/$PROJECT_NAME.release-$DEPLOY_RUN_ID-$DEPLOY_RUN_ATTEMPT/src\" \
+          promote \
+          --state-dir \"\$PHYSICAL_HOME/.local/state/$PROJECT_SLUG/deployment\" \
+          --checkout \"\$PHYSICAL_HOME/$PROJECT_NAME\" \
+          --release-checkout \"\$PHYSICAL_HOME/$PROJECT_NAME.release-$DEPLOY_RUN_ID-$DEPLOY_RUN_ATTEMPT\" \
+          --expected-origin \"https://github.com/${{ github.repository }}\" \
+          --compose-project \"adk-$PROJECT_SLUG\" \
+          --compose-service agent \
+          --source-revision \"$DEPLOY_SHA\" \
+          --image-reference \"$IMAGE_REPOSITORY@$IMAGE_DIGEST\" \
+          --adopt-existing \
+          --release-lease \"\$PHYSICAL_HOME/$PROJECT_NAME.release-$DEPLOY_RUN_ID-$DEPLOY_RUN_ATTEMPT.lease/lock\" \
+          --environment-stdin"
+          set +e
+          timeout --signal=TERM --kill-after=30s 30m \
+            ssh "${SSH_OPTIONS[@]}" "$SERVER_USER@$SERVER_HOST" \
+            "$CONTROLLER_COMMAND" < "$PAYLOAD_FILE"
+          CONTROLLER_STATUS=$?
+          set -e
+          case "$CONTROLLER_STATUS" in
+            124|137|143|255)
+              echo "ERROR: Controller transport ended ambiguously; checking the lease."
+              exit "$CONTROLLER_STATUS"
+              ;;
+          esac
+          REMOTE_CLEANUP_ALLOWED=1
+          exit "$CONTROLLER_STATUS"
 
-            CONTAINER_ID="$(
-              docker compose --project-name "$DEPLOY_PROJECT" \
-                --env-file .env -f compose.yaml ps --quiet agent
-            )"
-            if [ -z "$CONTAINER_ID" ]; then
-              echo "ERROR: Compose did not return the agent container."
+      - name: Cleanup private deployment transport
+        if: always()
+        env:
+          TRANSPORT_DIR: ${{ steps.transport.outputs.directory }}
+        run: |
+          set -eu
+          if [ -z "$TRANSPORT_DIR" ]; then
+            exit 0
+          fi
+          case "$TRANSPORT_DIR" in
+            "$RUNNER_TEMP"/adk-deploy.*) ;;
+            *)
+              echo "ERROR: Refusing to clean an unexpected transport directory."
               exit 1
-            fi
-            RUNNING_IMAGE="$(
-              docker inspect --type container \
-                --format '{{.Config.Image}}' "$CONTAINER_ID"
-            )"
-            if [ "$RUNNING_IMAGE" != "$IMAGE_NAME" ]; then
-              echo "ERROR: Running image does not match the deployment digest."
-              exit 1
-            fi
-            CONTAINER_IMAGE_ID="$(
-              docker inspect --type container --format '{{.Image}}' "$CONTAINER_ID"
-            )"
-            if [ -z "$CONTAINER_IMAGE_ID" ]; then
-              echo "ERROR: Running container does not expose an image ID."
-              exit 1
-            fi
-            RUNNING_REVISION="$(
-              docker image inspect \
-                --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
-                "$CONTAINER_IMAGE_ID"
-            )"
-            if [ "$RUNNING_REVISION" != "$DEPLOY_SHA" ]; then
-              echo "ERROR: Running image revision does not match the deployment commit."
-              exit 1
-            fi
-
-            docker image prune -f
+              ;;
+          esac
+          rm -f -- \
+            "$TRANSPORT_DIR/production.env" \
+            "$TRANSPORT_DIR/identity" \
+            "$TRANSPORT_DIR/scanned-host-keys" \
+            "$TRANSPORT_DIR/candidate-host-key" \
+            "$TRANSPORT_DIR/known-hosts" \
+            "$TRANSPORT_DIR/bootstrap-status"
+          rmdir "$TRANSPORT_DIR"

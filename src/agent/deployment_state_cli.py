@@ -74,9 +74,16 @@ def _inspect(store: DeploymentStateStore) -> int:
     with store.transaction() as transaction:
         current = transaction.current()
         journal = transaction.journal()
+        pending = transaction.pending()
         _emit(
             {
-                "status": "empty" if current is None else "recorded",
+                "status": (
+                    "pending"
+                    if pending is not None
+                    else "empty"
+                    if current is None
+                    else "recorded"
+                ),
                 "current": None if current is None else current.as_document(),
                 "journal": [
                     {
@@ -85,6 +92,7 @@ def _inspect(store: DeploymentStateStore) -> int:
                     }
                     for entry in journal
                 ],
+                "pending": None if pending is None else pending.as_document(),
             }
         )
     return 0
@@ -98,7 +106,11 @@ def _adopt(arguments: argparse.Namespace, store: DeploymentStateStore) -> int:
         else arguments.environment_file
     )
     with store.transaction() as transaction:
-        if transaction.current() is not None:
+        if (
+            transaction.current() is not None
+            or transaction.journal()
+            or transaction.pending() is not None
+        ):
             raise DeploymentStateCliError(
                 "deployment state has already been initialized"
             )

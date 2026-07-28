@@ -17,6 +17,7 @@ import pytest
 from agent.compose_env import (
     ComposeEnvironmentError,
     main,
+    parse_compose_environment,
     quote_compose_value,
     serialize_compose_environment,
     write_compose_environment,
@@ -128,6 +129,65 @@ def test_serialize_compose_environment_rejects_missing_keys() -> None:
         )
 
     assert "secret-canary" not in str(error.value)
+
+
+def test_parse_compose_environment_inverts_the_exact_serializer() -> None:
+    """Recover every supported escape without evaluating shell syntax."""
+    environment = {
+        "FIRST": "",
+        "SECOND": (
+            "dollar$VAR${OTHER} quote\" single' backslash\\ tab\t unicode-हॅलो # equals="
+        ),
+    }
+    payload = serialize_compose_environment(
+        ["SECOND", "FIRST"],
+        environment,
+    )
+
+    assert parse_compose_environment(payload, ["SECOND", "FIRST"]) == {
+        "SECOND": environment["SECOND"],
+        "FIRST": "",
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "names"),
+    [
+        ('KEY="value"\n', []),
+        ('INVALID-NAME="value"\n', ["INVALID-NAME"]),
+        ('KEY="value"\nKEY="value"\n', ["KEY", "KEY"]),
+        ('KEY="value"', ["KEY"]),
+        ('KEY="before\0after"\n', ["KEY"]),
+        ('KEY="before\rafter"\n', ["KEY"]),
+        ('KEY="value"\nEXTRA="value"\n', ["KEY"]),
+        ('OTHER="value"\n', ["KEY"]),
+        ("KEY=value\n", ["KEY"]),
+        ('KEY="value\n', ["KEY"]),
+        ('KEY="trailing\\"\n', ["KEY"]),
+        ('KEY="$value"\n', ["KEY"]),
+        ('KEY="trailing$"\n', ["KEY"]),
+        ('KEY="raw"quote"\n', ["KEY"]),
+        ('KEY="noncanonical\\q"\n', ["KEY"]),
+    ],
+)
+def test_parse_compose_environment_rejects_noncanonical_payloads(
+    payload: str,
+    names: list[str],
+) -> None:
+    """Reject malformed framing and escapes without reflecting payload bytes."""
+    with pytest.raises(
+        ComposeEnvironmentError,
+        match=(
+            "at least one environment key is required"
+            "|environment key is invalid"
+            "|environment key is duplicated"
+            "|serialized environment is invalid"
+        ),
+    ) as error:
+        parse_compose_environment(payload, names)
+
+    assert "value" not in str(error.value)
+    assert "before" not in str(error.value)
 
 
 def test_write_compose_environment_creates_complete_private_file(

@@ -17,7 +17,7 @@ from unittest.mock import create_autospec, patch
 
 import pytest
 
-from agent.deployment_state import DeploymentStateStore
+from agent.deployment_state import CandidateReceipt, DeploymentStateStore
 from agent.deployment_state_cli import main
 
 ORIGIN = "https://github.com/QueryPlanner/google-adk-on-bare-metal"
@@ -90,12 +90,22 @@ class CliExternalBoundary:
             ]:
                 return _completed(command, stdout=f"{ORIGIN}\n")
             if arguments in (
-                ["-C", str(self.checkout), "diff", "--quiet", "--"],
+                [
+                    "-C",
+                    str(self.checkout),
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--quiet",
+                    "--",
+                ],
                 [
                     "-C",
                     str(self.checkout),
                     "diff",
                     "--cached",
+                    "--no-ext-diff",
+                    "--no-textconv",
                     "--quiet",
                     "--",
                 ],
@@ -263,6 +273,7 @@ def test_inspect_empty_state_is_secret_free_json(
         "status": "empty",
         "current": None,
         "journal": [],
+        "pending": None,
     }
     assert captured.err == ""
     assert stat_mode(state_dir) == 0o700
@@ -299,6 +310,7 @@ def test_adopt_then_inspect_exact_state(
     inspected = json.loads(inspected_output.out)
     assert inspected["status"] == "recorded"
     assert inspected["current"] == adopted["current"]
+    assert inspected["pending"] is None
     assert len(inspected["journal"]) == 1
     assert inspected["journal"][0]["sha256"] == adopted["current"]["journal_sha256"]
     assert "secret-cli-canary" not in inspected_output.out
@@ -376,6 +388,73 @@ def test_existing_state_fails_before_reobservation(
     captured = capsys.readouterr()
     assert "already been initialized" in captured.err
     assert captured.out == ""
+    forbidden_which.assert_not_called()
+
+
+def test_inspect_pending_state_and_reject_adoption_before_observation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Expose recovery status without secrets or reinterpreting pending state."""
+    checkout, _ = _checkout(tmp_path)
+    state_dir = tmp_path / "state"
+    target_environment = tmp_path / "target.env"
+    target_environment.write_bytes(b'PRIVATE_KEY="pending-secret-canary"\n')
+    target_environment.chmod(0o600)
+    receipt = CandidateReceipt(
+        observed_at="2026-07-28T10:00:00.000000Z",
+        compose_project="adk-template-candidate",
+        compose_service="agent",
+        container_id=CONTAINER_ID,
+        image_reference=IMAGE_REFERENCE,
+        image_id=IMAGE_ID,
+        oci_revision=OCI_REVISION,
+        baseline_journal_sequence=None,
+        baseline_journal_sha256=None,
+    )
+    store = DeploymentStateStore(state_dir)
+    with store.transaction() as transaction:
+        pending = transaction.begin_promotion(
+            compose_project="adk-template",
+            compose_service="agent",
+            source_revision=OCI_REVISION,
+            image_reference=IMAGE_REFERENCE,
+            image_id=IMAGE_ID,
+            oci_revision=OCI_REVISION,
+            environment_source=target_environment,
+            candidate=receipt,
+            persistent_volumes=(),
+            transaction_id="pending-cli-1234567890",
+            recorded_at="2026-07-28T10:00:01.000000Z",
+        )
+
+    assert main(["inspect", "--state-dir", str(state_dir)]) == 0
+
+    captured = capsys.readouterr()
+    inspected = json.loads(captured.out)
+    assert inspected == {
+        "status": "pending",
+        "current": None,
+        "journal": [],
+        "pending": pending.as_document(),
+    }
+    assert "pending-secret-canary" not in captured.out
+    assert captured.err == ""
+
+    forbidden_which = create_autospec(
+        shutil.which,
+        spec_set=True,
+        side_effect=AssertionError("external observation should not run"),
+    )
+    with patch(
+        "agent.deployment_state_cli.shutil.which",
+        new=forbidden_which,
+    ):
+        assert main(_adopt_arguments(state_dir, checkout)) == 1
+
+    rejected = capsys.readouterr()
+    assert "already been initialized" in rejected.err
+    assert rejected.out == ""
     forbidden_which.assert_not_called()
 
 
@@ -489,7 +568,7 @@ def test_module_entrypoint_exits_with_main_status(
 
 
 def test_project_registers_operator_cli() -> None:
-    """Expose the reviewed module through the installed project command."""
+    """Expose both reviewed deployment modules through installed commands."""
     pyproject = tomllib.loads(
         (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
             encoding="utf-8"
@@ -498,4 +577,7 @@ def test_project_registers_operator_cli() -> None:
 
     assert pyproject["project"]["scripts"]["deployment-state"] == (
         "agent.deployment_state_cli:main"
+    )
+    assert pyproject["project"]["scripts"]["deployment-promote"] == (
+        "agent.deployment_promotion:main"
     )

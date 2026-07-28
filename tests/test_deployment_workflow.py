@@ -1,845 +1,642 @@
-"""Deployment workflow safety contract tests."""
+"""High-trust OpenSSH deployment workflow and script contract tests."""
 
-import os
+from __future__ import annotations
+
+import re
 import shlex
 import shutil
+import stat
 import subprocess
+import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import NamedTuple
+from typing import cast
 
 import pytest
 import yaml  # type: ignore[import-untyped]
 
-WORKFLOW_PATH = (
-    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "docker-publish.yml"
-)
-EXPECTED_DEPLOY_GUARD = (
-    "github.event_name == 'workflow_dispatch' && "
-    "github.ref == 'refs/heads/main' && "
-    "inputs.deploy"
-)
-EXPECTED_DEPLOY_CLAUSES = {
-    "github.event_name == 'workflow_dispatch'",
-    "github.ref == 'refs/heads/main'",
-    "inputs.deploy",
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_PATH = ROOT / ".github" / "workflows" / "docker-publish.yml"
+BOOTSTRAP_PATH = ROOT / "scripts" / "deployment_bootstrap.sh"
+CLEANUP_PATH = ROOT / "scripts" / "deployment_cleanup.sh"
+REVISION = "a" * 40
+DIGEST = f"sha256:{'b' * 64}"
+REPOSITORY = "MixedOwner/Mixed-Repository"
+PROJECT_NAME = "Mixed-Repository"
+RUN_ID = "12345"
+RUN_ATTEMPT = "2"
+ORIGIN = f"https://github.com/{REPOSITORY}"
+PRODUCTION_NAMES = {
+    "AGENT_NAME",
+    "DATABASE_URL",
+    "OPENROUTER_API_KEY",
+    "GOOGLE_API_KEY",
+    "ROOT_AGENT_MODEL",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_BASE_URL",
+    "LOG_LEVEL",
+    "PORT",
+    "HOST",
 }
-VALID_SHA = "a" * 40
-VALID_DIGEST = f"sha256:{'b' * 64}"
-EXPECTED_IMAGE = f"ghcr.io/mixedowner/mixed-repository@{VALID_DIGEST}"
-EXPECTED_ORIGIN = "https://github.com/MixedOwner/Mixed-Repository"
-EXPECTED_PROJECT = "adk-mixed-repository"
-SECRET_CANARIES = {
-    "DATABASE_URL": "postgresql://user:p$UNSET@database/agent",
-    "OPENROUTER_API_KEY": "$(printf command-substitution)",
-    "GOOGLE_API_KEY": "`printf backtick-substitution`",
-    "ROOT_AGENT_MODEL": "openrouter/provider/model",
-    "LANGFUSE_PUBLIC_KEY": "public-key",
-    "LANGFUSE_SECRET_KEY": "secret-key",
-    "LANGFUSE_HOST": "https://observability.example",
+EXPECTED_PINS = {
+    "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+    "docker/setup-qemu-action": "c7c53464625b32c7a7e944ae62b3e17d2b600130",
+    "docker/setup-buildx-action": "8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+    "docker/login-action": "c94ce9fb468520275223c153574b00df6fe4bcc9",
+    "docker/metadata-action": "c299e40c65443455700f0fdfc63efafe5b349051",
+    "docker/build-push-action": "ca052bb54ab0790a636c9b5f226502c73d547a25",
 }
 
 
-class DeployHarness(NamedTuple):
-    """Synthetic remote host boundaries for the tracked deployment script."""
-
-    environment: dict[str, str]
-    docker_log: Path
-    event_log: Path
-    git_log: Path
-    git_state: Path
-    home: Path
+def _workflow() -> dict[str, object]:
+    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    assert isinstance(document, dict)
+    return document
 
 
-def _indented_block(document: str, heading: str, indentation: int) -> str:
-    """Return the lines nested beneath an exact YAML heading."""
-    lines = document.splitlines()
-    start = lines.index(f"{' ' * indentation}{heading}") + 1
-    block: list[str] = []
-
-    for line in lines[start:]:
-        if line and not line.startswith(" " * (indentation + 1)):
-            break
-        block.append(line)
-
-    return "\n".join(block)
+def _job(name: str) -> dict[str, object]:
+    jobs = _workflow()["jobs"]
+    assert isinstance(jobs, dict)
+    job = jobs[name]
+    assert isinstance(job, dict)
+    return job
 
 
-def _deploy_guard(document: str) -> str:
-    """Extract and normalize the deploy job condition."""
-    deploy_block = _indented_block(document, "deploy:", 2)
-    lines = deploy_block.splitlines()
-    condition_start = lines.index("    if: >-") + 1
-    condition_lines: list[str] = []
-
-    for line in lines[condition_start:]:
-        if not line.startswith("      "):
-            break
-        condition_lines.append(line.strip())
-
-    return " ".join(condition_lines)
+def _steps(job: str) -> list[dict[str, object]]:
+    steps = _job(job)["steps"]
+    assert isinstance(steps, list)
+    return cast(list[dict[str, object]], steps)
 
 
-def _deploy_script(document: str) -> str:
-    """Extract the remote shell program from the deployment action."""
-    deploy_block = _indented_block(document, "deploy:", 2)
-    lines = deploy_block.splitlines()
-    script_start = lines.index("          script: |") + 1
-    script_lines: list[str] = []
-
-    for line in lines[script_start:]:
-        if line and not line.startswith("            "):
-            break
-        script_lines.append(line[12:] if line else "")
-
-    return "\n".join(script_lines)
+def _step(job: str, name: str) -> dict[str, object]:
+    matches = [step for step in _steps(job) if step.get("name") == name]
+    assert len(matches) == 1
+    return matches[0]
 
 
-def _materialize_deploy_script(script: str) -> str:
-    """Replace non-provenance GitHub expressions with deterministic values."""
-    replacements = {
-        "${{ github.event.repository.name }}": "Mixed-Repository",
-        "${{ github.repository }}": "MixedOwner/Mixed-Repository",
-    }
-    replacements.update(
-        {
-            "${{ secrets." + secret_name + " }}": secret_value
-            for secret_name, secret_value in SECRET_CANARIES.items()
-        }
+def _run_text(step: dict[str, object]) -> str:
+    value = step["run"]
+    assert isinstance(value, str)
+    return value
+
+
+def _run(
+    command: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str] | None = None,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - fixed test boundaries in tmp_path
+        command,
+        cwd=cwd,
+        env=environment,
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
     )
 
-    for expression, value in replacements.items():
-        script = script.replace(expression, value)
 
-    assert "${{" not in script
-    return script
+def _git(
+    git: str,
+    cwd: Path,
+    *arguments: str,
+    input_text: str | None = None,
+) -> str:
+    result = _run(
+        [git, *arguments],
+        cwd=cwd,
+        input_text=input_text,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
 
 
-def _write_executable(path: Path, content: str) -> None:
-    """Write one executable fake boundary."""
-    path.write_text(content, encoding="utf-8")
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
-@pytest.fixture
-def deploy_harness(tmp_path: Path) -> DeployHarness:
-    """Provide strict fake Git and Docker boundaries on an isolated host."""
-    bin_directory = tmp_path / "bin"
-    home = tmp_path / "home"
-    docker_log = tmp_path / "docker.log"
-    event_log = tmp_path / "events.log"
-    git_log = tmp_path / "git.log"
-    git_state = tmp_path / "git.state"
-    bin_directory.mkdir()
-    home.mkdir()
-    docker_log.touch()
-    event_log.touch()
-    git_log.touch()
-
-    _write_executable(
-        bin_directory / "git",
-        """#!/bin/sh
-set -eu
-
-printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
-printf 'git|%s\\n' "$*" >> "$FAKE_EVENT_LOG"
-
-case "$1" in
-  clone)
-    exit_code=${FAKE_GIT_CLONE_EXIT:-0}
-    [ "$exit_code" -eq 0 ] || exit "$exit_code"
-    mkdir -p "$3/.git"
-    ;;
-  remote)
-    [ "${2:-}" = "get-url" ] && [ "${3:-}" = "origin" ] || exit 99
-    exit_code=${FAKE_GIT_REMOTE_EXIT:-0}
-    [ "$exit_code" -eq 0 ] || exit "$exit_code"
-    printf '%s\\n' "${FAKE_GIT_ORIGIN}"
-    ;;
-  diff)
-    if [ "${2:-}" = "--cached" ]; then
-      if [ -f "$FAKE_GIT_STATE" ]; then
-        exit "${FAKE_GIT_STAGED_AFTER_EXIT:-0}"
-      fi
-      exit "${FAKE_GIT_STAGED_BEFORE_EXIT:-0}"
-    fi
-    if [ -f "$FAKE_GIT_STATE" ]; then
-      exit "${FAKE_GIT_UNSTAGED_AFTER_EXIT:-0}"
-    fi
-    exit "${FAKE_GIT_UNSTAGED_BEFORE_EXIT:-0}"
-    ;;
-  fetch)
-    exit "${FAKE_GIT_FETCH_EXIT:-0}"
-    ;;
-  checkout)
-    exit_code=${FAKE_GIT_CHECKOUT_EXIT:-0}
-    [ "$exit_code" -eq 0 ] || exit "$exit_code"
-    : > "$FAKE_GIT_STATE"
-    ;;
-  rev-parse)
-    exit_code=${FAKE_GIT_REV_PARSE_EXIT:-0}
-    [ "$exit_code" -eq 0 ] || exit "$exit_code"
-    printf '%s\\n' "${FAKE_GIT_HEAD:-$DEPLOY_SHA}"
-    ;;
-  ls-files)
-    exit "${FAKE_GIT_LS_FILES_EXIT:-0}"
-    ;;
-  *)
-    exit 99
-    ;;
-esac
-""",
-    )
-
-    _write_executable(
-        bin_directory / "docker",
-        """#!/bin/sh
-set -eu
-
-printf 'IMAGE=%s|%s\\n' "${IMAGE:-}" "$*" >> "$FAKE_DOCKER_LOG"
-printf 'docker|IMAGE=%s|%s\\n' "${IMAGE:-}" "$*" >> "$FAKE_EVENT_LOG"
-
-if [ "$1" = "compose" ]; then
-  operation=${8:-}
-  case "$operation" in
-    config)
-      exit_code=${FAKE_DOCKER_CONFIG_EXIT:-0}
-      [ "$exit_code" -eq 0 ] || exit "$exit_code"
-      printf '%s\\n' "${FAKE_DOCKER_CONFIG_IMAGE:-$IMAGE}"
-      ;;
-    pull)
-      exit "${FAKE_DOCKER_PULL_EXIT:-0}"
-      ;;
-    up)
-      exit "${FAKE_DOCKER_UP_EXIT:-0}"
-      ;;
-    ps)
-      exit_code=${FAKE_DOCKER_PS_EXIT:-0}
-      [ "$exit_code" -eq 0 ] || exit "$exit_code"
-      printf '%s' "${FAKE_DOCKER_CONTAINER_ID-agent-container}"
-      ;;
-    *)
-      exit 98
-      ;;
-  esac
-  exit 0
-fi
-
-if [ "$1" = "inspect" ]; then
-  case "$5" in
-    *Config.Image*)
-      exit_code=${FAKE_DOCKER_CONFIG_INSPECT_EXIT:-0}
-      [ "$exit_code" -eq 0 ] || exit "$exit_code"
-      printf '%s\\n' "${FAKE_DOCKER_RUNNING_IMAGE:-$IMAGE}"
-      ;;
-    *.Image*)
-      exit_code=${FAKE_DOCKER_IMAGE_ID_EXIT:-0}
-      [ "$exit_code" -eq 0 ] || exit "$exit_code"
-      printf '%s\\n' "${FAKE_DOCKER_IMAGE_ID-sha256:platform-image}"
-      ;;
-    *)
-      exit 97
-      ;;
-  esac
-  exit 0
-fi
-
-if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
-  exit_code=${FAKE_DOCKER_REVISION_EXIT:-0}
-  [ "$exit_code" -eq 0 ] || exit "$exit_code"
-  printf '%s\\n' "${FAKE_DOCKER_REVISION:-$DEPLOY_SHA}"
-  exit 0
-fi
-
-if [ "$1" = "image" ] && [ "$2" = "prune" ]; then
-  exit "${FAKE_DOCKER_PRUNE_EXIT:-0}"
-fi
-
-exit 96
-""",
-    )
-
-    environment = {
-        "FAKE_DOCKER_LOG": str(docker_log),
-        "FAKE_EVENT_LOG": str(event_log),
-        "FAKE_GIT_LOG": str(git_log),
-        "FAKE_GIT_ORIGIN": EXPECTED_ORIGIN,
-        "FAKE_GIT_STATE": str(git_state),
-        "HOME": str(home),
-        "LANG": "C",
-        "PATH": f"{bin_directory}:/usr/bin:/bin",
-    }
-    return DeployHarness(
-        environment,
-        docker_log,
-        event_log,
-        git_log,
-        git_state,
-        home,
-    )
+@dataclass(frozen=True, slots=True)
+class GitHarness:
+    home: Path
+    project: Path
+    release: Path
+    lease: Path
+    environment: dict[str, str]
+    revision: str
+    git_log: Path
+    hook_canary: Path
+    fsmonitor_canary: Path
+    diff_canary: Path
+    site_canary: Path
+    git: str
 
 
-def _run_deploy_script(
-    script: str,
-    harness: DeployHarness,
-    **environment_overrides: str,
-) -> subprocess.CompletedProcess[str]:
-    """Execute the materialized remote program against synthetic boundaries."""
-    environment = (
-        harness.environment
-        | {
-            "DEPLOY_SHA": VALID_SHA,
-            "IMAGE_DIGEST": VALID_DIGEST,
-        }
-        | environment_overrides
-    )
-    return subprocess.run(  # noqa: S603 - execute the tracked trusted script
-        ["/bin/sh"],
-        input=_materialize_deploy_script(script),
-        cwd=WORKFLOW_PATH.parents[2],
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def _evaluate_guard(
-    expression: str,
+def _git_harness(
+    tmp_path: Path,
     *,
-    event_name: str,
-    git_ref: str,
-    deploy: bool | None,
-) -> bool:
-    """Evaluate the supported clauses extracted from the workflow guard."""
-    clauses = tuple(clause.strip() for clause in expression.split("&&"))
-    outcomes = {
-        "github.event_name == 'workflow_dispatch'": (event_name == "workflow_dispatch"),
-        "github.ref == 'refs/heads/main'": git_ref == "refs/heads/main",
-        "inputs.deploy": deploy is True,
+    worktree_failure: str = "none",
+) -> GitHarness:
+    git = shutil.which("git")
+    assert git is not None
+    home = tmp_path / "home"
+    project = home / PROJECT_NAME
+    binary = tmp_path / "bin"
+    home.mkdir()
+    project.mkdir()
+    binary.mkdir()
+
+    _git(git, project, "init", "-q")
+    _git(git, project, "config", "user.name", "Deployment Test")
+    _git(git, project, "config", "user.email", "deployment@example.test")
+    tracked = {
+        ".gitignore": ".env\n__pycache__/\n*.pyc\n",
+        ".gitattributes": "compose.yaml diff=canary\n",
+        "compose.yaml": "services: {}\n",
+        "compose.candidate.yaml": "services: {}\n",
+        "src/agent/__init__.py": "",
+        "src/agent/compose_env.py": "VALUE = 'compose'\n",
+        "src/agent/deployment_adoption.py": "VALUE = 'adoption'\n",
+        "src/agent/deployment_promotion.py": "VALUE = 'promotion'\n",
+        "src/agent/deployment_state.py": "VALUE = 'state'\n",
     }
+    for relative, content in tracked.items():
+        path = project / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    _git(git, project, "add", ".")
+    _git(git, project, "commit", "-qm", "test release")
+    revision = _git(git, project, "rev-parse", "HEAD")
+    _git(git, project, "remote", "add", "origin", ORIGIN)
+    environment_path = project / ".env"
+    environment_path.write_text('PRIVATE="unchanged"\n', encoding="utf-8")
+    environment_path.chmod(0o600)
 
-    assert len(clauses) == len(EXPECTED_DEPLOY_CLAUSES)
-    assert set(clauses) == EXPECTED_DEPLOY_CLAUSES
-    return all(outcomes[clause] for clause in clauses)
-
-
-def _workflow_script() -> str:
-    """Read the current remote deployment program."""
-    return _deploy_script(WORKFLOW_PATH.read_text(encoding="utf-8"))
-
-
-def test_workflow_exposes_explicit_deploy_confirmation() -> None:
-    document = WORKFLOW_PATH.read_text(encoding="utf-8")
-    trigger_block = _indented_block(document, "on:", 0)
-    dispatch_block = _indented_block(trigger_block, "workflow_dispatch:", 2)
-    deploy_block = _indented_block(document, "deploy:", 2)
-
-    assert "  push:" in trigger_block
-    assert "  workflow_dispatch:" in trigger_block
-    assert "    inputs:" in dispatch_block
-    assert "      deploy:" in dispatch_block
-    assert "        required: true" in dispatch_block
-    assert "        type: boolean" in dispatch_block
-    assert "        default: false" in dispatch_block
-    assert "    needs: build" in deploy_block
-
-
-def test_reusable_quality_call_grants_only_codecov_oidc_permissions() -> None:
-    """Keep the called quality workflow authenticated and least privilege."""
-    document = WORKFLOW_PATH.read_text(encoding="utf-8")
-    quality_block = _indented_block(document, "quality:", 2)
-    permissions = _indented_block(quality_block, "permissions:", 4)
-
-    assert permissions.splitlines() == [
-        "      contents: read",
-        "      id-token: write",
-    ]
-    assert "    uses: ./.github/workflows/code-quality.yml" in quality_block
-    assert "secrets:" not in quality_block
-    assert "packages: write" not in quality_block
-
-
-def test_build_digest_is_passed_as_data_to_serialized_deploy() -> None:
-    """Bind the remote deployment to build output without script interpolation."""
-    document = WORKFLOW_PATH.read_text(encoding="utf-8")
-    build_block = _indented_block(document, "build:", 2)
-    deploy_block = _indented_block(document, "deploy:", 2)
-    concurrency = _indented_block(deploy_block, "concurrency:", 4)
-    script = _deploy_script(document)
-
-    assert "      digest: ${{ steps.build-push.outputs.digest }}" in build_block
-    assert "      - name: Record immutable image reference" in build_block
-    assert '            >> "$GITHUB_STEP_SUMMARY"' in build_block
-    assert "          DEPLOY_SHA: ${{ github.sha }}" in deploy_block
-    assert "          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}" in deploy_block
-    assert "          envs: DEPLOY_SHA,IMAGE_DIGEST" in deploy_block
-    assert concurrency.splitlines() == [
-        "      group: production-deployment",
-        "      cancel-in-progress: false",
-        "      queue: max",
-    ]
-    assert "${{ github.sha }}" not in script
-    assert "${{ needs.build.outputs.digest }}" not in script
-
-
-def test_remote_script_forbids_mutable_or_destructive_deploy_operations() -> None:
-    """Require detached provenance and one explicit Compose configuration."""
-    script = _workflow_script()
-
-    for forbidden in (
-        "git pull",
-        "git reset",
-        "git clean",
-        "checkout --force",
-        "checkout -f",
-        "ghcr.io/${{ github.repository }}:main",
-    ):
-        assert forbidden not in script
-
-    assert 'git checkout --detach "$DEPLOY_SHA"' in script
-    assert script.count('docker compose --project-name "$DEPLOY_PROJECT"') == 4
-    assert script.count("--env-file .env -f compose.yaml") == 4
-    assert script.count("docker inspect --type container") == 2
-
-
-def test_compose_resolves_one_exact_digest_without_repository_secrets(
-    tmp_path: Path,
-) -> None:
-    """Resolve the deploy image and trace service identity with real Compose."""
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("Docker CLI is unavailable")
-
-    compose_path = WORKFLOW_PATH.parents[2] / "compose.yaml"
-    (tmp_path / "compose.yaml").write_text(
-        compose_path.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    (tmp_path / ".env").write_text(
-        "AGENT_NAME=production-agent\n",
-        encoding="utf-8",
-    )
-    environment = {
-        "COMPOSE_DISABLE_ENV_FILE": "1",
-        "HOME": os.environ.get("HOME", str(tmp_path)),
-        "IMAGE": EXPECTED_IMAGE,
-        "LANG": "C",
-        "PATH": os.environ["PATH"],
-    }
-
-    result = subprocess.run(  # noqa: S603 - resolved Docker, fixed arguments
-        [
-            docker,
-            "compose",
-            "--project-name",
-            EXPECTED_PROJECT,
-            "--env-file",
-            ".env",
-            "-f",
-            "compose.yaml",
-            "config",
-        ],
-        cwd=tmp_path,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    resolved = yaml.safe_load(result.stdout)
-    agent = resolved["services"]["agent"]
-
-    assert agent["image"] == EXPECTED_IMAGE
-    assert agent["environment"]["AGENT_NAME"] == "production-agent"
-
-
-@pytest.mark.parametrize(
-    ("field", "invalid_value"),
-    [
-        ("DEPLOY_SHA", ""),
-        ("DEPLOY_SHA", "a" * 39),
-        ("DEPLOY_SHA", "a" * 41),
-        ("DEPLOY_SHA", "A" * 40),
-        ("DEPLOY_SHA", "g" * 40),
-        ("DEPLOY_SHA", f"{'a' * 39}\n"),
-        ("DEPLOY_SHA", "$(touch should-not-run)"),
-        ("IMAGE_DIGEST", ""),
-        ("IMAGE_DIGEST", f"sha256:{'b' * 63}"),
-        ("IMAGE_DIGEST", f"sha256:{'b' * 65}"),
-        ("IMAGE_DIGEST", f"sha256:{'B' * 64}"),
-        ("IMAGE_DIGEST", f"sha256:{'g' * 64}"),
-        ("IMAGE_DIGEST", f"sha256:{'b' * 63}\n"),
-        ("IMAGE_DIGEST", f"sha512:{'b' * 64}"),
-        ("IMAGE_DIGEST", "b" * 64),
-        ("IMAGE_DIGEST", "$(touch should-not-run)"),
-    ],
-)
-def test_invalid_provenance_fails_before_side_effects(
-    deploy_harness: DeployHarness,
-    field: str,
-    invalid_value: str,
-) -> None:
-    """Reject malformed provenance as data before touching Git or Docker."""
-    sentinel = deploy_harness.home / "should-not-run"
-    value = invalid_value.replace("should-not-run", str(sentinel))
-
-    result = _run_deploy_script(
-        _workflow_script(),
-        deploy_harness,
-        **{field: value},
-    )
-
-    assert result.returncode != 0
-    assert "ERROR: Invalid " in result.stdout
-    assert deploy_harness.git_log.read_text(encoding="utf-8") == ""
-    assert deploy_harness.docker_log.read_text(encoding="utf-8") == ""
-    assert not (deploy_harness.home / "Mixed-Repository").exists()
-    assert not sentinel.exists()
-
-
-@pytest.mark.parametrize("existing_checkout", [False, True])
-def test_remote_deploy_uses_exact_commit_digest_and_literal_secrets(
-    deploy_harness: DeployHarness,
-    existing_checkout: bool,
-) -> None:
-    """Deploy one exact revision and preserve shell-sensitive secret bytes."""
-    project_directory = deploy_harness.home / "Mixed-Repository"
-    if existing_checkout:
-        (project_directory / ".git").mkdir(parents=True)
-
-    result = _run_deploy_script(_workflow_script(), deploy_harness)
-
-    assert result.returncode == 0, result.stderr
-    git_commands = deploy_harness.git_log.read_text(encoding="utf-8").splitlines()
-    expected_after_clone = [
-        "remote get-url origin",
-        "diff --quiet --",
-        "diff --cached --quiet --",
-        f"fetch --no-tags origin {VALID_SHA}",
-        f"checkout --detach {VALID_SHA}",
-        "rev-parse --verify HEAD",
-        "diff --quiet --",
-        "diff --cached --quiet --",
-        "ls-files --error-unmatch -- compose.yaml",
-    ]
-    if existing_checkout:
-        assert git_commands == expected_after_clone
-    else:
-        assert git_commands == [
-            f"clone {EXPECTED_ORIGIN} {project_directory}",
-            *expected_after_clone,
-        ]
-
-    compose_prefix = (
-        f"compose --project-name {EXPECTED_PROJECT} --env-file .env -f compose.yaml"
-    )
-    assert deploy_harness.docker_log.read_text(encoding="utf-8").splitlines() == [
-        f"IMAGE={EXPECTED_IMAGE}|{compose_prefix} config --images",
-        f"IMAGE={EXPECTED_IMAGE}|{compose_prefix} pull agent",
-        (
-            f"IMAGE={EXPECTED_IMAGE}|{compose_prefix} "
-            "up --no-build --wait --wait-timeout 180 agent"
-        ),
-        f"IMAGE={EXPECTED_IMAGE}|{compose_prefix} ps --quiet agent",
-        (
-            f"IMAGE={EXPECTED_IMAGE}|inspect --type container "
-            "--format {{.Config.Image}} agent-container"
-        ),
-        (
-            f"IMAGE={EXPECTED_IMAGE}|inspect --type container "
-            "--format {{.Image}} agent-container"
-        ),
-        (
-            f"IMAGE={EXPECTED_IMAGE}|image inspect --format "
-            '{{ index .Config.Labels "org.opencontainers.image.revision" }} '
-            "sha256:platform-image"
-        ),
-        f"IMAGE={EXPECTED_IMAGE}|image prune -f",
-    ]
-    environment_document = (project_directory / ".env").read_text(encoding="utf-8")
-    for secret_value in SECRET_CANARIES.values():
-        assert secret_value in environment_document
-    assert "LANGFUSE_BASE_URL=https://observability.example\n" in environment_document
-    assert "\nLANGFUSE_HOST=" not in environment_document
-
-
-def test_remote_deploy_checks_out_real_git_commit_detached(
-    deploy_harness: DeployHarness,
-    tmp_path: Path,
-) -> None:
-    """Independently prove the tracked program reaches an exact detached commit."""
-    real_git = shutil.which("git")
-    assert real_git is not None
-
-    remote = tmp_path / "remote.git"
-    seed = tmp_path / "seed"
-    project = deploy_harness.home / "Mixed-Repository"
-    git_environment = {
-        "HOME": str(deploy_harness.home),
-        "LANG": "C",
-        "PATH": "/usr/bin:/bin",
-    }
-
-    def run_git(*arguments: str, cwd: Path | None = None) -> str:
-        result = subprocess.run(  # noqa: S603 - resolved Git, controlled arguments
-            [real_git, *arguments],
-            cwd=cwd,
-            env=git_environment,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        return result.stdout.strip()
-
-    run_git("init", "--bare", str(remote))
-    run_git("init", str(seed))
-    run_git("-C", str(seed), "config", "user.email", "test@example.com")
-    run_git("-C", str(seed), "config", "user.name", "Test Author")
-    tracked_file = seed / "tracked.txt"
-    tracked_file.write_text("first\n", encoding="utf-8")
-    (seed / "compose.yaml").write_text(
-        "services:\n  agent:\n    image: agent\n",
-        encoding="utf-8",
-    )
-    run_git("-C", str(seed), "add", "tracked.txt", "compose.yaml")
-    run_git("-C", str(seed), "commit", "-m", "first")
-    run_git("-C", str(seed), "remote", "add", "origin", str(remote))
-    run_git("-C", str(seed), "push", "origin", "HEAD:main")
-    run_git("--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main")
-    run_git("clone", str(remote), str(project))
-    run_git("-C", str(project), "remote", "set-url", "origin", EXPECTED_ORIGIN)
-
-    tracked_file.write_text("second\n", encoding="utf-8")
-    run_git("-C", str(seed), "add", "tracked.txt")
-    run_git("-C", str(seed), "commit", "-m", "second")
-    target_sha = run_git("-C", str(seed), "rev-parse", "HEAD")
-    run_git("-C", str(seed), "push", "origin", "HEAD:main")
-
-    real_bin = tmp_path / "real-bin"
-    real_bin.mkdir()
-    shutil.copy2(
-        Path(deploy_harness.environment["PATH"].split(":", maxsplit=1)[0]) / "docker",
-        real_bin / "docker",
-    )
+    hook_canary = tmp_path / "post-checkout-ran"
+    fsmonitor_canary = tmp_path / "fsmonitor-ran"
+    diff_canary = tmp_path / "external-diff-ran"
+    site_canary = tmp_path / "sitecustomize-ran"
+    hook = project / ".git" / "hooks" / "post-checkout"
+    _write_executable(hook, f"#!/bin/sh\n: > {shlex.quote(str(hook_canary))}\n")
+    fsmonitor = tmp_path / "fsmonitor"
     _write_executable(
-        real_bin / "git",
-        f"""#!/bin/sh
-set -eu
-if [ "$1" = "fetch" ] && [ "$2" = "--no-tags" ] && [ "$3" = "origin" ]; then
-  exec {shlex.quote(real_git)} fetch --no-tags {shlex.quote(str(remote))} "$4"
+        fsmonitor,
+        f"#!/bin/sh\n: > {shlex.quote(str(fsmonitor_canary))}\nprintf '\\n'\n",
+    )
+    external_diff = tmp_path / "external-diff"
+    _write_executable(
+        external_diff,
+        f"#!/bin/sh\n: > {shlex.quote(str(diff_canary))}\nexit 1\n",
+    )
+    _git(git, project, "config", "core.fsmonitor", str(fsmonitor))
+    _git(git, project, "config", "diff.canary.command", str(external_diff))
+
+    empty_tree = _git(git, project, "mktree", input_text="")
+    malicious = _git(
+        git,
+        project,
+        "commit-tree",
+        empty_tree,
+        input_text="replacement\n",
+    )
+    _git(git, project, "replace", revision, malicious)
+
+    sitecustomize = home / "sitecustomize.py"
+    sitecustomize.write_text(
+        f"from pathlib import Path\nPath({str(site_canary)!r}).write_text('loaded')\n",
+        encoding="utf-8",
+    )
+
+    git_log = tmp_path / "git.log"
+    quoted_git = shlex.quote(git)
+    quoted_log = shlex.quote(str(git_log))
+    failure_body = ""
+    if worktree_failure == "registered":
+        failure_body = f"""
+if [ "$IS_WORKTREE_ADD" -eq 1 ]; then
+  {quoted_git} "$@"
+  STATUS=$?
+  [ "$STATUS" -eq 0 ] || exit "$STATUS"
+  exit 47
 fi
-exec {shlex.quote(real_git)} "$@"
+"""
+    elif worktree_failure == "partial":
+        failure_body = """
+if [ "$IS_WORKTREE_ADD" -eq 1 ]; then
+  LAST=
+  PREVIOUS=
+  for ARG in "$@"; do
+    PREVIOUS=$LAST
+    LAST=$ARG
+  done
+  mkdir -p "$PREVIOUS"
+  printf partial > "$PREVIOUS/partial"
+  exit 47
+fi
+"""
+    _write_executable(
+        binary / "git",
+        f"""#!/bin/sh
+set -u
+printf '%s\\n' "$*" >> {quoted_log}
+IS_FETCH=0
+IS_WORKTREE=0
+IS_WORKTREE_ADD=0
+for ARG in "$@"; do
+  if [ "$ARG" = fetch ]; then IS_FETCH=1; fi
+  if [ "$ARG" = worktree ]; then IS_WORKTREE=1; continue; fi
+  if [ "$IS_WORKTREE" -eq 1 ] && [ "$ARG" = add ]; then
+    IS_WORKTREE_ADD=1
+  fi
+done
+if [ "$IS_FETCH" -eq 1 ]; then exit 0; fi
+{failure_body}
+exec {quoted_git} "$@"
 """,
     )
-
-    result = _run_deploy_script(
-        _workflow_script(),
-        deploy_harness,
-        DEPLOY_SHA=target_sha,
-        PATH=f"{real_bin}:/usr/bin:/bin",
+    _write_executable(binary / "flock", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        binary / "python3",
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
     )
+    environment = {
+        "HOME": str(home),
+        "PATH": f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PYTHONPATH": str(home),
+        "GIT_DIR": str(tmp_path / "hostile-git-dir"),
+        "GIT_WORK_TREE": str(tmp_path / "hostile-work-tree"),
+        "GIT_INDEX_FILE": str(tmp_path / "hostile-index"),
+        "GIT_OBJECT_DIRECTORY": str(tmp_path / "hostile-objects"),
+        "GIT_EXEC_PATH": str(tmp_path / "hostile-exec"),
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.hooksPath",
+        "GIT_CONFIG_VALUE_0": str(project / ".git" / "hooks"),
+    }
+    release = home / f"{PROJECT_NAME}.release-{RUN_ID}-{RUN_ATTEMPT}"
+    return GitHarness(
+        home=home,
+        project=project,
+        release=release,
+        lease=Path(f"{release}.lease"),
+        environment=environment,
+        revision=revision,
+        git_log=git_log,
+        hook_canary=hook_canary,
+        fsmonitor_canary=fsmonitor_canary,
+        diff_canary=diff_canary,
+        site_canary=site_canary,
+        git=git,
+    )
+
+
+def _bootstrap(harness: GitHarness) -> subprocess.CompletedProcess[str]:
+    return _run(
+        [
+            "/bin/sh",
+            str(BOOTSTRAP_PATH),
+            harness.revision,
+            DIGEST,
+            RUN_ID,
+            RUN_ATTEMPT,
+            PROJECT_NAME,
+            REPOSITORY,
+        ],
+        cwd=ROOT,
+        environment=harness.environment,
+    )
+
+
+def _cleanup(harness: GitHarness) -> subprocess.CompletedProcess[str]:
+    return _run(
+        [
+            "/bin/sh",
+            str(CLEANUP_PATH),
+            harness.revision,
+            DIGEST,
+            RUN_ID,
+            RUN_ATTEMPT,
+            PROJECT_NAME,
+            REPOSITORY,
+        ],
+        cwd=ROOT,
+        environment=harness.environment,
+    )
+
+
+def test_external_actions_are_pinned_to_reviewed_commits() -> None:
+    uses: list[str] = []
+    for job in ("build", "deploy"):
+        for step in _steps(job):
+            if isinstance(step.get("uses"), str):
+                uses.append(cast(str, step["uses"]))
+
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", value) for value in uses)
+    assert {
+        value.split("@", maxsplit=1)[0]: value.split("@", maxsplit=1)[1]
+        for value in uses
+    } == EXPECTED_PINS
+
+
+def test_deploy_is_manual_bounded_read_only_and_serialized() -> None:
+    deploy = _job("deploy")
+    condition = " ".join(str(deploy["if"]).split())
+
+    assert condition == (
+        "github.event_name == 'workflow_dispatch' && "
+        "github.ref == 'refs/heads/main' && inputs.deploy"
+    )
+    assert deploy["permissions"] == {"contents": "read"}
+    assert deploy["timeout-minutes"] == 50
+    assert deploy["concurrency"] == {
+        "group": "production-deployment",
+        "cancel-in-progress": False,
+    }
+    assert deploy["env"] == {
+        "DEPLOY_SHA": "${{ github.sha }}",
+        "IMAGE_DIGEST": "${{ needs.build.outputs.digest }}",
+        "DEPLOY_RUN_ID": "${{ github.run_id }}",
+        "DEPLOY_RUN_ATTEMPT": "${{ github.run_attempt }}",
+    }
+
+
+def test_production_secrets_are_scoped_only_to_isolated_serializer() -> None:
+    serializer = _step("deploy", "Serialize production environment")
+    transport = _step("deploy", "Run locked transactional deployment")
+    serializer_environment = cast(dict[str, str], serializer["env"])
+    transport_environment = cast(dict[str, str], transport["env"])
+    serializer_command = _run_text(serializer)
+    transport_script = _run_text(transport)
+
+    assert set(serializer_environment) == PRODUCTION_NAMES | {"TRANSPORT_DIR"}
+    assert set(transport_environment) == {
+        "TRANSPORT_DIR",
+        "SERVER_HOST",
+        "SERVER_USER",
+        "SSH_PRIVATE_KEY",
+        "SERVER_HOST_FINGERPRINT",
+    }
+    for step in _steps("deploy"):
+        if step.get("name") == "Serialize production environment":
+            continue
+        environment = step.get("env", {})
+        assert isinstance(environment, dict)
+        assert PRODUCTION_NAMES.isdisjoint(environment)
+    assert serializer_command.startswith(
+        'python3 -I -S -B "$GITHUB_WORKSPACE/src/agent/compose_env.py"'
+    )
+    assert "PYTHONPATH" not in serializer_command
+    assert "-m agent" not in serializer_command
+    prepare_script = _run_text(_step("deploy", "Prepare private deployment transport"))
+    assert "src/agent/compose_env.py" in prepare_script
+    assert 'git ls-tree "$DEPLOY_SHA" -- "$SOURCE_PATH"' in prepare_script
+    assert 'if [ ! -f "$SOURCE_PATH" ] || [ -L "$SOURCE_PATH" ]' in prepare_script
+    assert "100644:blob|100755:blob" in prepare_script
+    assert "${{ secrets.DATABASE_URL }}" not in transport_script
+    assert "${{ secrets.OPENROUTER_API_KEY }}" not in transport_script
+    assert PRODUCTION_NAMES.isdisjoint(transport_script.split())
+    assert PRODUCTION_NAMES.isdisjoint(
+        BOOTSTRAP_PATH.read_text(encoding="utf-8").split()
+    )
+    assert PRODUCTION_NAMES.isdisjoint(CLEANUP_PATH.read_text(encoding="utf-8").split())
+
+
+def test_openssh_transport_is_strict_direct_and_lease_gated() -> None:
+    script = _run_text(_step("deploy", "Run locked transactional deployment"))
+    controller = script[
+        script.index('CONTROLLER_COMMAND="') : script.index("CONTROLLER_STATUS=$?")
+    ]
+
+    assert "appleboy" not in WORKFLOW_PATH.read_text(encoding="utf-8")
+    for option in (
+        "-F /dev/null",
+        ' -i "$IDENTITY_FILE"',
+        "StrictHostKeyChecking=yes",
+        '"UserKnownHostsFile=$KNOWN_HOSTS"',
+        "GlobalKnownHostsFile=/dev/null",
+        "IdentitiesOnly=yes",
+        "IdentityAgent=none",
+        "ForwardAgent=no",
+        "ForwardX11=no",
+        "ClearAllForwardings=yes",
+        "RequestTTY=no",
+    ):
+        assert option in script
+    assert "unset SSH_PRIVATE_KEY" in script
+    assert "unset SERVER_HOST_FINGERPRINT" in script
+    assert script.index("unset SSH_PRIVATE_KEY") < script.index("ssh-keyscan")
+    assert 'if [ "$MATCHING_KEYS" -ne 1 ]' in script
+    assert "scripts/deployment_bootstrap.sh" in script
+    assert "scripts/deployment_cleanup.sh" in script
+    assert "<<'REMOTE_" not in script
+    assert "PHYSICAL_HOME=" in controller
+    assert "exec env -i" in controller
+    assert "python3 -I -S -B" in controller
+    assert 'runpy.run_module(\\"agent.deployment_promotion\\"' in controller
+    assert "--release-lease" in controller
+    assert "--environment-stdin" in controller
+    assert "git " not in controller
+    assert "flock" not in controller
+    assert "CONTROLLER_FILE" not in script
+    assert "REMOTE_CLEANUP_ALLOWED=0" not in controller
+    assert "124|137|143|255" in script
+    assert script.count("checking the lease") == 2
+    assert "timeout --signal=TERM --kill-after=30s 8m" in script
+    assert "timeout --signal=TERM --kill-after=30s 30m" in script
+    assert "timeout --signal=TERM --kill-after=15s 2m" in script
+
+
+def test_scripts_are_posix_shell_and_encode_exact_cleanup_order() -> None:
+    for path in (BOOTSTRAP_PATH, CLEANUP_PATH):
+        result = _run(["/bin/sh", "-n", str(path)], cwd=ROOT)
+        assert result.returncode == 0, result.stderr
+
+    bootstrap = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    cleanup = CLEANUP_PATH.read_text(encoding="utf-8")
+    assert bootstrap.index("WORKTREE_CLEANUP_ARMED=1") < bootstrap.index("worktree add")
+    assert bootstrap.index("Legacy .env permissions block deployment") < (
+        bootstrap.index("git_safe clone")
+    )
+    assert "--no-ext-diff --no-textconv" in bootstrap
+    assert "GIT_NO_REPLACE_OBJECTS=1" in bootstrap
+    assert "GIT_TEMPLATE_DIR=/dev/null" in bootstrap
+    assert "-c core.hooksPath=/dev/null" in bootstrap
+    assert "-c core.fsmonitor=false" in bootstrap
+    assert "BOOTSTRAP_LEASE_READY:%s:%s" in bootstrap
+    assert "worktree remove \\\n          --force" in bootstrap
+    assert "shutil.rmtree.avoids_symlink_attacks" in bootstrap
+    assert 'ls-tree "$DEPLOY_SHA" -- "$TARGET_PATH"' in bootstrap
+    assert "100644|100755" in bootstrap
+    assert '[ ! -f "$RELEASE_DIR/$TARGET_PATH" ]' in bootstrap
+    assert '[ -L "$RELEASE_DIR/$TARGET_PATH" ]' in bootstrap
+    assert 'worktree remove "$RELEASE_DIR"' in cleanup
+    assert "worktree remove --force" not in cleanup
+    assert "--ignored=matching" in bootstrap
+    assert "--ignored=matching" in cleanup
+    for forbidden in ("reset --hard", "git clean", "docker compose down", "prune"):
+        assert forbidden not in bootstrap
+        assert forbidden not in cleanup
+
+
+def test_real_git_bootstrap_ignores_hooks_site_config_and_replace_refs(
+    tmp_path: Path,
+) -> None:
+    harness = _git_harness(tmp_path)
+
+    result = _bootstrap(harness)
 
     assert result.returncode == 0, result.stderr
-    assert run_git("-C", str(project), "rev-parse", "HEAD") == target_sha
-    symbolic_ref = subprocess.run(  # noqa: S603 - resolved Git, controlled arguments
-        [real_git, "-C", str(project), "symbolic-ref", "--quiet", "HEAD"],
-        env=git_environment,
-        text=True,
-        capture_output=True,
-        check=False,
+    assert f"BOOTSTRAP_LEASE_READY:{RUN_ID}:{RUN_ATTEMPT}" in result.stdout
+    assert harness.release.is_dir()
+    assert (harness.release / "compose.yaml").read_text() == "services: {}\n"
+    assert _git(harness.git, harness.release, "rev-parse", "HEAD") == harness.revision
+    assert stat.S_IMODE(harness.lease.stat().st_mode) == 0o700
+    assert stat.S_IMODE((harness.lease / "lock").stat().st_mode) == 0o600
+    assert not harness.hook_canary.exists()
+    assert not harness.fsmonitor_canary.exists()
+    assert not harness.diff_canary.exists()
+    assert not harness.site_canary.exists()
+
+    cleanup = _cleanup(harness)
+
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert not harness.release.exists()
+    assert not harness.lease.exists()
+    assert (harness.project / ".env").read_text() == 'PRIVATE="unchanged"\n'
+
+
+def test_legacy_0644_environment_fails_before_git_mutation(tmp_path: Path) -> None:
+    harness = _git_harness(tmp_path)
+    (harness.project / ".env").chmod(0o644)
+
+    result = _bootstrap(harness)
+
+    assert result.returncode == 1
+    assert "Legacy .env permissions block deployment" in result.stdout
+    assert f'chmod 600 "{harness.project}/.env"' in result.stdout
+    log = (
+        harness.git_log.read_text(encoding="utf-8") if harness.git_log.exists() else ""
     )
-    assert symbolic_ref.returncode == 1
-    assert (project / "tracked.txt").read_text(encoding="utf-8") == "second\n"
+    assert " fetch " not in f" {log} "
+    assert " worktree " not in f" {log} "
+    assert not harness.release.exists()
+    assert not harness.lease.exists()
 
 
-def test_remote_deploy_accepts_equivalent_dot_git_origin(
-    deploy_harness: DeployHarness,
+def test_external_diff_is_disabled_on_dirty_primary_checkout(
+    tmp_path: Path,
 ) -> None:
-    """Allow Git's conventional suffix without accepting another repository."""
-    project_directory = deploy_harness.home / "Mixed-Repository"
-    (project_directory / ".git").mkdir(parents=True)
-
-    result = _run_deploy_script(
-        _workflow_script(),
-        deploy_harness,
-        FAKE_GIT_ORIGIN=f"{EXPECTED_ORIGIN}.git",
+    harness = _git_harness(tmp_path)
+    (harness.project / "compose.yaml").write_text(
+        "services:\n  changed: {}\n",
+        encoding="utf-8",
     )
+
+    result = _bootstrap(harness)
+
+    assert result.returncode == 1
+    assert "Tracked worktree changes block deployment" in result.stdout
+    assert not harness.diff_canary.exists()
+    assert "--no-ext-diff --no-textconv --quiet" in harness.git_log.read_text()
+    assert not harness.release.exists()
+
+
+def test_bootstrap_rejects_tracked_required_symlink(tmp_path: Path) -> None:
+    """Reject a clean tracked symlink before Python or Compose can follow it."""
+    harness = _git_harness(tmp_path)
+    _git(harness.git, harness.project, "replace", "-d", harness.revision)
+    outside = tmp_path / "outside-controller.py"
+    outside.write_text("PRIVATE_CANARY = 'outside-commit'\n", encoding="utf-8")
+    controller = harness.project / "src" / "agent" / "deployment_promotion.py"
+    controller.unlink()
+    controller.symlink_to(outside)
+    _git(harness.git, harness.project, "add", "src/agent/deployment_promotion.py")
+    _git(harness.git, harness.project, "commit", "-qm", "tracked symlink")
+    selected = replace(
+        harness,
+        revision=_git(harness.git, harness.project, "rev-parse", "HEAD"),
+    )
+
+    result = _bootstrap(selected)
+
+    assert result.returncode == 1
+    assert "unsafe required file type" in result.stdout
+    assert not selected.release.exists()
+    assert not selected.lease.exists()
+
+
+@pytest.mark.parametrize("failure_mode", ["registered", "partial"])
+def test_post_materialization_failure_removes_only_owned_release(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    harness = _git_harness(tmp_path, worktree_failure=failure_mode)
+
+    result = _bootstrap(harness)
+
+    assert result.returncode == 47, result.stderr
+    assert not harness.release.exists()
+    assert not harness.lease.exists()
+    listing = _git(harness.git, harness.project, "worktree", "list", "--porcelain")
+    assert str(harness.release) not in listing
+    if failure_mode == "registered":
+        assert "worktree remove --force" in harness.git_log.read_text()
+
+
+def test_cleanup_handles_marker_without_materialized_release(tmp_path: Path) -> None:
+    harness = _git_harness(tmp_path)
+    result = _bootstrap(harness)
+    assert result.returncode == 0, result.stderr
+    remove = _run(
+        [
+            harness.git,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-C",
+            str(harness.project),
+            "worktree",
+            "remove",
+            "--force",
+            str(harness.release),
+        ],
+        cwd=ROOT,
+    )
+    assert remove.returncode == 0, remove.stderr
+
+    cleanup = _cleanup(harness)
+
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert not harness.lease.exists()
+
+
+def test_cleanup_rejects_ignored_bytecode_and_preserves_release(
+    tmp_path: Path,
+) -> None:
+    harness = _git_harness(tmp_path)
+    result = _bootstrap(harness)
+    assert result.returncode == 0, result.stderr
+    cache = harness.release / "src" / "agent" / "__pycache__"
+    cache.mkdir()
+    (cache / "deployment_promotion.cpython-313.pyc").write_bytes(b"canary")
+
+    cleanup = _cleanup(harness)
+
+    assert cleanup.returncode == 1
+    assert "not exact-clean" in cleanup.stdout
+    assert harness.release.exists()
+    assert harness.lease.exists()
+
+
+def test_cleanup_is_verified_noop_when_bootstrap_created_nothing(
+    tmp_path: Path,
+) -> None:
+    harness = _git_harness(tmp_path)
+
+    result = _cleanup(harness)
 
     assert result.returncode == 0, result.stderr
-
-
-def test_remote_deploy_rejects_non_git_project_path(
-    deploy_harness: DeployHarness,
-) -> None:
-    """Never overwrite an operator-owned path that is not this checkout."""
-    project_directory = deploy_harness.home / "Mixed-Repository"
-    project_directory.mkdir()
-    sentinel = project_directory / "operator-owned"
-    sentinel.write_text("preserve\n", encoding="utf-8")
-
-    result = _run_deploy_script(_workflow_script(), deploy_harness)
-
-    assert result.returncode != 0
-    assert "path exists without a Git checkout" in result.stdout
-    assert deploy_harness.git_log.read_text(encoding="utf-8") == ""
-    assert deploy_harness.docker_log.read_text(encoding="utf-8") == ""
-    assert sentinel.read_text(encoding="utf-8") == "preserve\n"
-
-
-def test_remote_deploy_rejects_untracked_only_compose_file(
-    deploy_harness: DeployHarness,
-) -> None:
-    """Do not let a host file replace config deleted by the exact commit."""
-    project_directory = deploy_harness.home / "Mixed-Repository"
-    (project_directory / ".git").mkdir(parents=True)
-    untracked_compose = project_directory / "compose.yaml"
-    untracked_compose.write_text("operator-owned\n", encoding="utf-8")
-
-    result = _run_deploy_script(
-        _workflow_script(),
-        deploy_harness,
-        FAKE_GIT_LS_FILES_EXIT="1",
-    )
-
-    assert result.returncode != 0
-    assert "does not track compose.yaml" in result.stdout
-    assert deploy_harness.docker_log.read_text(encoding="utf-8") == ""
-    assert not (project_directory / ".env").exists()
-    assert untracked_compose.read_text(encoding="utf-8") == "operator-owned\n"
-
-
-@pytest.mark.parametrize(
-    ("environment", "expected_message", "forbidden_event"),
-    [
-        (
-            {"FAKE_GIT_ORIGIN": "https://github.com/other/repository"},
-            "unexpected origin",
-            "git|fetch",
-        ),
-        (
-            {"FAKE_GIT_UNSTAGED_BEFORE_EXIT": "31"},
-            "Tracked worktree changes",
-            "git|fetch",
-        ),
-        (
-            {"FAKE_GIT_STAGED_BEFORE_EXIT": "32"},
-            "Staged changes",
-            "git|fetch",
-        ),
-        (
-            {"FAKE_GIT_HEAD": "c" * 40},
-            "Checked-out commit does not match",
-            "docker|",
-        ),
-        (
-            {"FAKE_GIT_UNSTAGED_AFTER_EXIT": "33"},
-            "Checkout left tracked",
-            "docker|",
-        ),
-        (
-            {"FAKE_GIT_STAGED_AFTER_EXIT": "34"},
-            "Checkout left staged",
-            "docker|",
-        ),
-    ],
-)
-def test_checkout_provenance_failures_stop_before_docker(
-    deploy_harness: DeployHarness,
-    environment: dict[str, str],
-    expected_message: str,
-    forbidden_event: str,
-) -> None:
-    """Keep unrelated origins, dirty trees, and SHA drift out of deployment."""
-    project_directory = deploy_harness.home / "Mixed-Repository"
-    (project_directory / ".git").mkdir(parents=True)
-    existing_env = project_directory / ".env"
-    existing_env.write_text("operator-owned\n", encoding="utf-8")
-
-    result = _run_deploy_script(
-        _workflow_script(),
-        deploy_harness,
-        **environment,
-    )
-
-    assert result.returncode != 0
-    assert expected_message in result.stdout
-    assert forbidden_event not in deploy_harness.event_log.read_text(encoding="utf-8")
-    assert existing_env.read_text(encoding="utf-8") == "operator-owned\n"
-
-
-@pytest.mark.parametrize(
-    ("environment", "forbidden_fragment"),
-    [
-        ({"FAKE_GIT_CLONE_EXIT": "40"}, "git|remote"),
-        ({"FAKE_GIT_FETCH_EXIT": "41"}, "git|checkout"),
-        ({"FAKE_GIT_CHECKOUT_EXIT": "42"}, "git|rev-parse"),
-        ({"FAKE_GIT_REV_PARSE_EXIT": "43"}, "docker|"),
-        ({"FAKE_DOCKER_CONFIG_EXIT": "51"}, " pull agent"),
-        ({"FAKE_DOCKER_CONFIG_IMAGE": "ghcr.io/other@sha256:bad"}, " pull agent"),
-        ({"FAKE_DOCKER_PULL_EXIT": "52"}, " up --no-build"),
-        ({"FAKE_DOCKER_UP_EXIT": "53"}, " ps --quiet agent"),
-        ({"FAKE_DOCKER_PS_EXIT": "54"}, "inspect --type container"),
-        ({"FAKE_DOCKER_CONTAINER_ID": ""}, "inspect --type container"),
-        ({"FAKE_DOCKER_CONFIG_INSPECT_EXIT": "55"}, "format {{.Image}}"),
-        (
-            {"FAKE_DOCKER_RUNNING_IMAGE": "ghcr.io/other@sha256:bad"},
-            "format {{.Image}}",
-        ),
-        ({"FAKE_DOCKER_IMAGE_ID_EXIT": "56"}, "image inspect"),
-        ({"FAKE_DOCKER_IMAGE_ID": ""}, "image inspect"),
-        ({"FAKE_DOCKER_REVISION_EXIT": "57"}, "image prune"),
-        ({"FAKE_DOCKER_REVISION": "d" * 40}, "image prune"),
-    ],
-)
-def test_deploy_boundary_failure_stops_later_actions(
-    deploy_harness: DeployHarness,
-    environment: dict[str, str],
-    forbidden_fragment: str,
-) -> None:
-    """Propagate each external failure without continuing or pruning."""
-    result = _run_deploy_script(
-        _workflow_script(),
-        deploy_harness,
-        **environment,
-    )
-
-    assert result.returncode != 0
-    assert forbidden_fragment not in deploy_harness.event_log.read_text(
-        encoding="utf-8"
-    )
-    assert "image prune -f" not in deploy_harness.docker_log.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize(
-    ("event_name", "git_ref", "deploy", "expected"),
-    [
-        ("push", "refs/heads/main", True, False),
-        ("push", "refs/tags/v1.0.0", True, False),
-        ("workflow_dispatch", "refs/heads/feature", True, False),
-        ("workflow_dispatch", "refs/tags/main", True, False),
-        ("workflow_dispatch", "refs/heads/main", False, False),
-        ("workflow_dispatch", "refs/heads/main", None, False),
-        ("workflow_dispatch", "refs/heads/main", True, True),
-        ("schedule", "refs/heads/main", True, False),
-    ],
-)
-def test_deploy_guard_requires_manual_main_confirmation(
-    event_name: str,
-    git_ref: str,
-    deploy: bool | None,
-    expected: bool,
-) -> None:
-    document = WORKFLOW_PATH.read_text(encoding="utf-8")
-    guard = _deploy_guard(document)
-
-    assert guard == EXPECTED_DEPLOY_GUARD
-    assert (
-        _evaluate_guard(
-            guard,
-            event_name=event_name,
-            git_ref=git_ref,
-            deploy=deploy,
-        )
-        is expected
-    )
+    assert not harness.release.exists()
+    assert not harness.lease.exists()

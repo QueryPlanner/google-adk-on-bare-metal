@@ -32,6 +32,7 @@ dependencies = [
 [project.scripts]
 server = "agent.server:main"
 deployment-state = "agent.deployment_state_cli:main"
+deployment-promote = "agent.deployment_promotion:main"
 
 [dependency-groups]
 dev = [

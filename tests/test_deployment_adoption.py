@@ -115,10 +115,24 @@ class ObservationBoundary:
         assert timeout == 30
         assert env["GIT_OPTIONAL_LOCKS"] == "0"
         assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert env["GIT_CONFIG_SYSTEM"] == "/dev/null"
+        assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "core.hooksPath"
+        assert env["GIT_CONFIG_VALUE_0"] == "/dev/null"
+        assert env["GIT_CONFIG_KEY_1"] == "core.fsmonitor"
+        assert env["GIT_CONFIG_VALUE_1"] == "false"
         assert env["LC_ALL"] == "C"
         assert env["LANG"] == "C"
         assert "GIT_DIR" not in env
+        assert "OPENROUTER_API_KEY" not in env
         assert env["DOCKER_CONFIG"] == "/private/docker-config"
+        if "DOCKER_HOST" in os.environ:
+            assert env["DOCKER_HOST"] == os.environ["DOCKER_HOST"]
+        if "XDG_RUNTIME_DIR" in os.environ:
+            assert env["XDG_RUNTIME_DIR"] == os.environ["XDG_RUNTIME_DIR"]
 
         selected = tuple(command)
         self.calls.append(selected)
@@ -146,6 +160,8 @@ class ObservationBoundary:
                 "-C",
                 str(self.checkout),
                 "diff",
+                "--no-ext-diff",
+                "--no-textconv",
                 "--quiet",
                 "--",
             ]:
@@ -155,6 +171,8 @@ class ObservationBoundary:
                 str(self.checkout),
                 "diff",
                 "--cached",
+                "--no-ext-diff",
+                "--no-textconv",
                 "--quiet",
                 "--",
             ]:
@@ -747,7 +765,10 @@ def test_default_process_environment_is_sanitized(
         os.environ,
         {
             "DOCKER_CONFIG": "/private/docker-config",
+            "DOCKER_HOST": "unix:///private/docker.sock",
             "GIT_WORK_TREE": "secret",
+            "OPENROUTER_API_KEY": "secret-canary",
+            "XDG_RUNTIME_DIR": "/private/runtime",
         },
         clear=True,
     ):
