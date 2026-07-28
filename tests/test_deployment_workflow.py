@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -19,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "docker-publish.yml"
 BOOTSTRAP_PATH = ROOT / "scripts" / "deployment_bootstrap.sh"
 CLEANUP_PATH = ROOT / "scripts" / "deployment_cleanup.sh"
+EVAL_GATE_PATH = ROOT / "tests" / "eval" / "production_adk_eval.py"
+PYPROJECT_PATH = ROOT / "pyproject.toml"
+LOCK_PATH = ROOT / "uv.lock"
 REVISION = "a" * 40
 DIGEST = f"sha256:{'b' * 64}"
 REPOSITORY = "MixedOwner/Mixed-Repository"
@@ -46,6 +50,7 @@ EXPECTED_PINS = {
     "docker/login-action": "c94ce9fb468520275223c153574b00df6fe4bcc9",
     "docker/metadata-action": "c299e40c65443455700f0fdfc63efafe5b349051",
     "docker/build-push-action": "ca052bb54ab0790a636c9b5f226502c73d547a25",
+    "astral-sh/setup-uv": "d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86",
 }
 
 
@@ -329,7 +334,7 @@ def _cleanup(harness: GitHarness) -> subprocess.CompletedProcess[str]:
 
 def test_external_actions_are_pinned_to_reviewed_commits() -> None:
     uses: list[str] = []
-    for job in ("build", "deploy"):
+    for job in ("build", "production_eval", "deploy"):
         for step in _steps(job):
             if isinstance(step.get("uses"), str):
                 uses.append(cast(str, step["uses"]))
@@ -347,7 +352,9 @@ def test_deploy_is_manual_bounded_read_only_and_serialized() -> None:
 
     assert condition == (
         "github.event_name == 'workflow_dispatch' && "
-        "github.ref == 'refs/heads/main' && inputs.deploy"
+        "github.ref == 'refs/heads/main' && inputs.deploy && "
+        "needs.build.result == 'success' && "
+        "needs.production_eval.result == 'success'"
     )
     assert deploy["permissions"] == {"contents": "read"}
     assert deploy["timeout-minutes"] == 50
@@ -355,12 +362,105 @@ def test_deploy_is_manual_bounded_read_only_and_serialized() -> None:
         "group": "production-deployment",
         "cancel-in-progress": False,
     }
+    assert deploy["needs"] == ["build", "production_eval"]
     assert deploy["env"] == {
         "DEPLOY_SHA": "${{ github.sha }}",
         "IMAGE_DIGEST": "${{ needs.build.outputs.digest }}",
         "DEPLOY_RUN_ID": "${{ github.run_id }}",
         "DEPLOY_RUN_ATTEMPT": "${{ github.run_attempt }}",
     }
+
+
+def test_production_eval_is_manual_locked_exact_and_fail_closed() -> None:
+    job = _job("production_eval")
+    condition = " ".join(str(job["if"]).split())
+    steps = _steps("production_eval")
+
+    assert condition == (
+        "github.event_name == 'workflow_dispatch' && "
+        "github.ref == 'refs/heads/main' && inputs.deploy"
+    )
+    assert job["needs"] == "quality"
+    assert job["permissions"] == {"contents": "read"}
+    assert job["timeout-minutes"] == 10
+    assert "env" not in job
+    assert "outputs" not in job
+    assert "continue-on-error" not in job
+    assert "always()" not in condition
+
+    checkout = _step("production_eval", "Checkout evaluation revision")
+    assert checkout["with"] == {
+        "ref": "${{ github.sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": False,
+    }
+    verification = _step("production_eval", "Verify evaluation revision")
+    assert verification["env"] == {"EVALUATION_SHA": "${{ github.sha }}"}
+    assert "git rev-parse --verify HEAD" in _run_text(verification)
+
+    install = _step("production_eval", "Install locked evaluation dependencies")
+    assert _run_text(install) == ("uv sync --locked --no-default-groups --group eval")
+    assert "env" not in install
+
+    evaluation = _step("production_eval", "Run committed ADK compatibility evaluation")
+    assert "if" not in evaluation
+    assert "continue-on-error" not in evaluation
+    assert evaluation["env"] == {
+        "ADK_DISABLE_LOAD_DOTENV": "true",
+        "GOOGLE_API_KEY": "",
+        "MEM0_EMBEDDER_DIMS": "",
+        "MEM0_EMBEDDER_MODEL": "__disabled_for_adk_compatibility_eval__",
+        "OPENROUTER_API_KEY": "${{ secrets.OPENROUTER_API_KEY }}",
+        "OTEL_SDK_DISABLED": "true",
+        "PYTEST_ADDOPTS": "",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTEST_PLUGINS": "",
+        "ROOT_AGENT_MODEL": "google/gemini-2.5-flash",
+    }
+    assert " ".join(_run_text(evaluation).split()) == (
+        "uv run --locked --no-sync --no-default-groups --group eval "
+        "pytest --noconftest --confcutdir=tests/eval "
+        "-o addopts= -p no:cacheprovider "
+        "tests/eval/production_adk_eval.py "
+        "-q --tb=line --disable-warnings --show-capture=no"
+    )
+
+    for step in steps:
+        if step.get("name") == "Run committed ADK compatibility evaluation":
+            continue
+        assert "${{ secrets." not in str(step)
+    assert (
+        sum(str(step).count("${{ secrets.OPENROUTER_API_KEY }}") for step in steps) == 1
+    )
+
+    project = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    assert project["dependency-groups"]["eval"] == [
+        "google-adk[eval]==1.36.2",
+        "pytest>=8.3.4,<9.0.0",
+    ]
+    lock = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
+    locked_project = next(
+        package
+        for package in lock["package"]
+        if package["name"] == "google-adk-on-bare-metal"
+    )
+    assert locked_project["dev-dependencies"]["eval"] == [
+        {"name": "google-adk", "extra": ["eval"]},
+        {"name": "pytest"},
+    ]
+    assert locked_project["metadata"]["requires-dev"]["eval"] == [
+        {"name": "google-adk", "extras": ["eval"], "specifier": "==1.36.2"},
+        {"name": "pytest", "specifier": ">=8.3.4,<9.0.0"},
+    ]
+    rendered = WORKFLOW_PATH.read_text(encoding="utf-8")
+    evaluation_job = rendered[
+        rendered.index("  production_eval:") : rendered.index("\n  deploy:")
+    ]
+    for forbidden in (" --with ", "pip install", "uv add", "uv lock", "always()"):
+        assert forbidden not in evaluation_job
+    assert EVAL_GATE_PATH.name == "production_adk_eval.py"
+    assert not EVAL_GATE_PATH.name.startswith("test_")
+    assert not EVAL_GATE_PATH.name.endswith("_test.py")
 
 
 def test_production_secrets_are_scoped_only_to_isolated_serializer() -> None:
