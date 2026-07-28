@@ -86,12 +86,75 @@ jobs:
             "$REGISTRY" "$IMAGE_NAME" "$IMAGE_DIGEST" \
             >> "$GITHUB_STEP_SUMMARY"
 
-  deploy:
-    needs: build
+  production_eval:
+    name: Gate production on ADK compatibility
+    needs: quality
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
       inputs.deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout evaluation revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify evaluation revision
+        env:
+          EVALUATION_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$(git rev-parse --verify HEAD)" != "$EVALUATION_SHA" ]; then
+            echo "ERROR: Evaluation checkout does not match the requested commit."
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Install locked evaluation dependencies
+        run: uv sync --locked --no-default-groups --group eval
+
+      - name: Run committed ADK compatibility evaluation
+        env:
+          ADK_DISABLE_LOAD_DOTENV: "true"
+          GOOGLE_API_KEY: ""
+          MEM0_EMBEDDER_DIMS: ""
+          MEM0_EMBEDDER_MODEL: __disabled_for_adk_compatibility_eval__
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OTEL_SDK_DISABLED: "true"
+          PYTEST_ADDOPTS: ""
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTEST_PLUGINS: ""
+          ROOT_AGENT_MODEL: google/gemini-2.5-flash
+        run: >-
+          uv run --locked --no-sync --no-default-groups --group eval
+          pytest --noconftest --confcutdir=tests/eval
+          -o addopts= -p no:cacheprovider
+          tests/eval/production_adk_eval.py -q --tb=line
+          --disable-warnings --show-capture=no
+
+  deploy:
+    needs: [build, production_eval]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.deploy &&
+      needs.build.result == 'success' &&
+      needs.production_eval.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
