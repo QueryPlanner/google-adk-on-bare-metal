@@ -709,8 +709,20 @@ def _container_identity(document: Mapping[str, object]) -> dict[str, object]:
         and isinstance(config, dict)
         and isinstance(network, dict)
         and isinstance(mounts, list)
+        and all(isinstance(mount, dict) for mount in mounts)
     ):
         raise AssertionError("sentinel container identity was invalid")
+    canonical_mounts = tuple(
+        sorted(
+            mounts,
+            key=lambda mount: json.dumps(
+                mount,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+    )
     return {
         "Id": document.get("Id"),
         "Name": document.get("Name"),
@@ -728,7 +740,7 @@ def _container_identity(document: Mapping[str, object]) -> dict[str, object]:
                 "FinishedAt",
             )
         },
-        "Mounts": mounts,
+        "Mounts": canonical_mounts,
         "Networks": network.get("Networks"),
     }
 
@@ -1178,6 +1190,49 @@ def test_builder_cache_identity_rejects_invalid_last_used_age(
         pytest.raises(AssertionError, match="cache identity was invalid"),
     ):
         _builder_cache_identity("docker", {})
+
+
+def test_container_identity_canonicalizes_mount_order() -> None:
+    """Treat Docker's top-level mount array as an unordered resource set."""
+    mounts = [
+        {
+            "Type": "volume",
+            "Name": "sentinel-volume",
+            "Source": "/var/lib/docker/volumes/sentinel/_data",
+            "Destination": "/sentinel",
+            "Driver": "local",
+            "Mode": "z",
+            "RW": True,
+            "Propagation": "",
+        },
+        {
+            "Type": "volume",
+            "Name": "anonymous-volume",
+            "Source": "/var/lib/docker/volumes/anonymous/_data",
+            "Destination": "/var/lib/registry",
+            "Driver": "local",
+            "Mode": "",
+            "RW": True,
+            "Propagation": "",
+        },
+    ]
+    document = {
+        "State": {},
+        "Config": {},
+        "NetworkSettings": {"Networks": {}},
+        "Mounts": mounts,
+    }
+    reordered = {**document, "Mounts": list(reversed(mounts))}
+    changed = {
+        **document,
+        "Mounts": [mounts[0], {**mounts[1], "RW": False}],
+    }
+
+    identity = _container_identity(document)
+    assert _container_identity(reordered) == identity
+    assert _container_identity(changed) != identity
+    with pytest.raises(AssertionError, match="container identity was invalid"):
+        _container_identity({**document, "Mounts": [*mounts, "invalid"]})
 
 
 def test_hosted_retention_job_is_exact_and_isolated() -> None:
