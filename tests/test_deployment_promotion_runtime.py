@@ -1157,6 +1157,11 @@ def _push_exact_image(
         environment=environment,
         timeout=30,
     )
+    _run(
+        [docker, "image", "pull", exact_reference],
+        environment=environment,
+        timeout=180,
+    )
     exact_document = _image_identity(docker, environment, exact_reference)
     assert exact_document.get("Id") == source_image_id
     assert exact_document.get("RepoDigests") == [exact_reference]
@@ -2001,6 +2006,87 @@ def _assert_safe_output(result: subprocess.CompletedProcess[str]) -> None:
             for stream in (result.stdout, result.stderr)
         ):
             raise AssertionError("promotion output exposed a private canary")
+
+
+def test_pushed_fixture_is_rehydrated_by_immutable_digest() -> None:
+    """Pull the digest after removing the fixture's final mutable tags."""
+    source_image_id = f"sha256:{'a' * 64}"
+    source_tag = "fixture-source:phase"
+    image_repository = "127.0.0.1:49152/adk-promotion-proof-0123456789abcdef/agent"
+    repository_tag = f"{image_repository}:phase"
+    exact_reference = f"{image_repository}@sha256:{'b' * 64}"
+    cleanup_targets: list[CleanupTarget] = []
+    runner = create_autospec(
+        _run,
+        spec_set=True,
+        side_effect=[
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Id": source_image_id,
+                            "RepoDigests": [exact_reference],
+                            "RepoTags": [source_tag, repository_tag],
+                        }
+                    ]
+                ),
+                stderr="",
+            ),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Id": source_image_id,
+                            "RepoDigests": [exact_reference],
+                            "RepoTags": [],
+                        }
+                    ]
+                ),
+                stderr="",
+            ),
+        ],
+    )
+
+    with patch(f"{__name__}._run", runner):
+        result = _push_exact_image(
+            "docker",
+            {},
+            cleanup_targets,
+            source_image_id=source_image_id,
+            source_tag=source_tag,
+            repository_tag=repository_tag,
+        )
+
+    assert result == exact_reference
+    assert cleanup_targets == [
+        CleanupTarget(
+            kind="image",
+            reference=repository_tag,
+            expected_id=source_image_id,
+        ),
+        CleanupTarget(
+            kind="image",
+            reference=exact_reference,
+            expected_id=source_image_id,
+        ),
+    ]
+    commands = [call.args[0] for call in runner.call_args_list]
+    assert commands[4:] == [
+        ["docker", "image", "rm", repository_tag],
+        ["docker", "image", "rm", source_tag],
+        ["docker", "image", "pull", exact_reference],
+        ["docker", "image", "inspect", exact_reference],
+    ]
 
 
 def test_runtime_redaction_covers_embedded_byte_representations() -> None:

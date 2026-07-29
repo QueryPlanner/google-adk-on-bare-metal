@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from unittest.mock import create_autospec, patch
 from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 
@@ -215,15 +216,20 @@ def _inspect_optional(
         timeout=30,
     )
     if result.returncode != 0:
-        if any(
-            marker in result.stderr
-            for marker in (
-                "No such image",
-                "No such container",
-                "No such network",
-                "No such object",
-                "No such volume",
-            )
+        exact_absence_errors = {
+            "container": (
+                f"Error response from daemon: No such container: {reference}\n"
+            ),
+            "image": f"Error response from daemon: No such image: {reference}\n",
+            "network": f"Error response from daemon: network {reference} not found\n",
+            "volume": (
+                f"Error response from daemon: get {reference}: no such volume\n"
+            ),
+        }
+        if (
+            result.returncode == 1
+            and result.stdout in {"[]", "[]\n"}
+            and result.stderr == exact_absence_errors[kind]
         ):
             return None
         raise AssertionError(f"Docker {kind} inspection failed")
@@ -1016,6 +1022,72 @@ def _workflow_job() -> dict[str, object]:
     if not isinstance(job, dict):
         raise AssertionError("deployment-retention job was unavailable")
     return job
+
+
+@pytest.mark.parametrize(
+    ("kind", "stderr"),
+    [
+        (
+            "container",
+            "Error response from daemon: No such container: fixture\n",
+        ),
+        ("image", "Error response from daemon: No such image: fixture\n"),
+        ("network", "Error response from daemon: network fixture not found\n"),
+        ("volume", "Error response from daemon: get fixture: no such volume\n"),
+    ],
+)
+def test_optional_inspection_accepts_exact_docker_absence(
+    kind: ResourceKind,
+    stderr: str,
+) -> None:
+    """Match the reference-bound absence output emitted by Docker inspect."""
+    result = subprocess.CompletedProcess(
+        ["docker", kind, "inspect", "fixture"],
+        1,
+        stdout="[]\n",
+        stderr=stderr,
+    )
+    runner = create_autospec(_run, spec_set=True, return_value=result)
+
+    with patch(f"{__name__}._run", runner):
+        assert _inspect_optional("docker", {}, kind, "fixture") is None
+
+    runner.assert_called_once_with(
+        ["docker", kind, "inspect", "fixture"],
+        environment={},
+        check=False,
+        timeout=30,
+    )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    [
+        (1, "", "Error response from daemon: network fixture not found\n"),
+        (1, "[]\n", "Error response from daemon: network other not found\n"),
+        (1, "[]\n", "Error response from daemon: No such network: fixture\n"),
+        (2, "[]\n", "Error response from daemon: network fixture not found\n"),
+    ],
+)
+def test_optional_inspection_rejects_ambiguous_absence(
+    returncode: int,
+    stdout: str,
+    stderr: str,
+) -> None:
+    """Fail closed when Docker's status, identity, or JSON output disagrees."""
+    result = subprocess.CompletedProcess(
+        ["docker", "network", "inspect", "fixture"],
+        returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+    runner = create_autospec(_run, spec_set=True, return_value=result)
+
+    with (
+        patch(f"{__name__}._run", runner),
+        pytest.raises(AssertionError, match="network inspection failed"),
+    ):
+        _inspect_optional("docker", {}, "network", "fixture")
 
 
 def test_hosted_retention_job_is_exact_and_isolated() -> None:
