@@ -80,7 +80,6 @@ type BuilderCacheIdentity = tuple[
     str,
     str,
     int,
-    str | None,
 ]
 
 
@@ -973,7 +972,6 @@ def _builder_cache_identity(
                 record_type,
                 description,
                 usage_count,
-                last_used_at,
             )
         )
     if len({identity[0] for identity in identities}) != len(identities):
@@ -1088,6 +1086,98 @@ def test_optional_inspection_rejects_ambiguous_absence(
         pytest.raises(AssertionError, match="network inspection failed"),
     ):
         _inspect_optional("docker", {}, "network", "fixture")
+
+
+def test_builder_cache_identity_ignores_relative_last_used_age() -> None:
+    """Compare stable cache records without comparing Docker's relative clock."""
+    document = {
+        "CreatedAt": "2026-07-29 01:07:59.391031871 +0000 UTC",
+        "Description": "local source for context",
+        "ID": "cache-record",
+        "LastUsedAt": "Less than a second ago",
+        "Mutable": False,
+        "Parents": None,
+        "Reclaimable": True,
+        "Shared": False,
+        "Size": "0B",
+        "Type": "source.local",
+        "UsageCount": 1,
+    }
+    later_document = {**document, "LastUsedAt": "2 seconds ago"}
+    runner = create_autospec(
+        _run,
+        spec_set=True,
+        side_effect=[
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=f"{json.dumps(document)}\n",
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=f"{json.dumps(later_document)}\n",
+                stderr="",
+            ),
+        ],
+    )
+
+    with patch(f"{__name__}._run", runner):
+        initial = _builder_cache_identity("docker", {})
+        later = _builder_cache_identity("docker", {})
+
+    expected = (
+        (
+            "cache-record",
+            (),
+            "2026-07-29 01:07:59.391031871 +0000 UTC",
+            False,
+            True,
+            "0B",
+            "source.local",
+            "local source for context",
+            1,
+        ),
+    )
+    assert initial == expected
+    assert later == expected
+
+
+@pytest.mark.parametrize("last_used_at", ["", 0, []])
+def test_builder_cache_identity_rejects_invalid_last_used_age(
+    last_used_at: object,
+) -> None:
+    """Keep validating Docker's dynamic field even though it is not compared."""
+    document = {
+        "CreatedAt": "2026-07-29 01:07:59.391031871 +0000 UTC",
+        "Description": "local source for context",
+        "ID": "cache-record",
+        "LastUsedAt": last_used_at,
+        "Mutable": False,
+        "Parents": None,
+        "Reclaimable": True,
+        "Shared": False,
+        "Size": "0B",
+        "Type": "source.local",
+        "UsageCount": 1,
+    }
+    runner = create_autospec(
+        _run,
+        spec_set=True,
+        return_value=subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=f"{json.dumps(document)}\n",
+            stderr="",
+        ),
+    )
+
+    with (
+        patch(f"{__name__}._run", runner),
+        pytest.raises(AssertionError, match="cache identity was invalid"),
+    ):
+        _builder_cache_identity("docker", {})
 
 
 def test_hosted_retention_job_is_exact_and_isolated() -> None:
