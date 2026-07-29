@@ -33,6 +33,10 @@ from agent.deployment_adoption import (
     DeploymentObservation,
     observe_legacy_deployment,
 )
+from agent.deployment_retention import (
+    ImageRetentionError,
+    enforce_pull_admission,
+)
 from agent.deployment_state import (
     CandidateReceipt,
     CurrentDeployment,
@@ -93,6 +97,7 @@ _IMAGE_REFERENCE = re.compile(
     r"@sha256:[0-9a-f]{64}\Z"
 )
 _EXPECTED_ORIGIN = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+_GITHUB_REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _VOLUME_CREATED_AT = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
     r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
@@ -148,11 +153,13 @@ class PromotionConfig:
     checkout: Path
     release_checkout: Path
     expected_origin: str
+    repository: str
     compose_project: str
     compose_service: str
     source_revision: str
     image_reference: str
     adopt_existing: bool
+    image_repository: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +237,11 @@ def _validated_config(config: PromotionConfig) -> PromotionConfig:
         config.expected_origin
     ) is None or config.expected_origin.endswith(".git"):
         raise PromotionError("expected origin is invalid")
+    if (
+        _GITHUB_REPOSITORY.fullmatch(config.repository) is None
+        or config.expected_origin != f"https://github.com/{config.repository}"
+    ):
+        raise PromotionError("GitHub repository identity is invalid")
     for value, field in (
         (config.compose_project, "Compose project"),
         (config.compose_service, "Compose service"),
@@ -240,6 +252,15 @@ def _validated_config(config: PromotionConfig) -> PromotionConfig:
         raise PromotionError("source revision is invalid")
     if _IMAGE_REFERENCE.fullmatch(config.image_reference) is None:
         raise PromotionError("image reference is not an immutable digest")
+    image_repository = (
+        f"ghcr.io/{config.repository.lower()}"
+        if config.image_repository is None
+        else config.image_repository
+    )
+    if _IMAGE_REFERENCE.fullmatch(f"{image_repository}@sha256:{'0' * 64}") is None:
+        raise PromotionError("image repository identity is invalid")
+    if not config.image_reference.startswith(f"{image_repository}@sha256:"):
+        raise PromotionError("image reference repository does not match")
     return config
 
 
@@ -661,6 +682,27 @@ def _pull_and_prove_image(
         executables=executables,
         environment=environment,
     )
+
+
+def _enforce_image_retention_admission(
+    *,
+    transaction: DeploymentStateTransaction,
+    config: PromotionConfig,
+    executables: Executables,
+    environment: Mapping[str, str],
+) -> None:
+    """Require one read-only, exact project-image capacity proof."""
+    try:
+        enforce_pull_admission(
+            transaction,
+            docker=executables.docker,
+            environment=environment,
+            repository=config.repository,
+            target_reference=config.image_reference,
+            image_repository=config.image_repository,
+        )
+    except ImageRetentionError as error:
+        raise PromotionError(f"image-retention admission failed: {error}") from None
 
 
 def _container_ids(
@@ -1634,10 +1676,22 @@ def _promote_locked(
         executables=executables,
         environment=command_environment,
     )
+    _enforce_image_retention_admission(
+        transaction=transaction,
+        config=config,
+        executables=executables,
+        environment=command_environment,
+    )
     image = _pull_and_prove_image(
         config,
         executables,
         command_environment,
+    )
+    _enforce_image_retention_admission(
+        transaction=transaction,
+        config=config,
+        executables=executables,
+        environment=command_environment,
     )
     transaction_id = _new_transaction_id(original_revision)
     receipt = _run_candidate(
@@ -1804,6 +1858,7 @@ def _parser() -> argparse.ArgumentParser:
     promote_parser.add_argument("--checkout", required=True, type=Path)
     promote_parser.add_argument("--release-checkout", required=True, type=Path)
     promote_parser.add_argument("--expected-origin", required=True)
+    promote_parser.add_argument("--repository", required=True)
     promote_parser.add_argument("--compose-project", required=True)
     promote_parser.add_argument("--compose-service", required=True)
     promote_parser.add_argument("--source-revision", required=True)
@@ -1882,6 +1937,8 @@ def main(
     argv: Sequence[str] | None = None,
     environment: Mapping[str, str] | None = None,
     input_stream: BinaryIO | None = None,
+    *,
+    _image_repository: str | None = None,
 ) -> int:
     """Run the promotion CLI and return a stable process status."""
     arguments = _parser().parse_args(sys.argv[1:] if argv is None else argv)
@@ -1890,11 +1947,13 @@ def main(
         checkout=arguments.checkout,
         release_checkout=arguments.release_checkout,
         expected_origin=arguments.expected_origin,
+        repository=arguments.repository,
         compose_project=arguments.compose_project,
         compose_service=arguments.compose_service,
         source_revision=arguments.source_revision,
         image_reference=arguments.image_reference,
         adopt_existing=arguments.adopt_existing,
+        image_repository=_image_repository,
     )
     try:
         if (arguments.release_lease is None) != (not arguments.environment_stdin):

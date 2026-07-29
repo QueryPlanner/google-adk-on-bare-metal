@@ -89,6 +89,54 @@ a free lease permits removal only after the ownership marker, detached commit,
 and exact-clean worktree all match. Inspect the VM process and deployment
 journal before removing any residual release manually.
 
+### Bounded production image retention
+
+Published images carry the stable
+`io.queryplanner.adk.repository=<owner>/<repository>` ownership label in
+addition to the OCI source and revision labels. After release bootstrap and
+before the deployment controller can pull a candidate, the workflow runs the
+retention policy from that exact detached release under the deployment-state
+lock. The controller repeats the read-only capacity admission check under the
+same lock immediately before its pull, then repeats the strict ownership and
+capacity proof after the pull and before any candidate starts.
+
+The VM cache has a hard maximum of eight managed digest references. When the
+requested digest is not local, retention first reduces the cache to seven and
+reserves the eighth slot for that pull. An already-local, fully verified target
+uses the normal eight-reference limit. The keep set always includes the
+requested target, the current deployment, the two newest distinct prior
+`promoted` or `adopted` generations, and images used by any container. This
+provides a three-generation local rollback cache. There is no age-based
+deletion: aliases, malformed ownership evidence, unresolved recovery state,
+and other ambiguity are retained and can block admission.
+
+One invocation removes at most five exact, eligible digest references. The
+fixed batch has no override. If more safe deletions remain, the command reports
+an incomplete nonzero result after that batch, and the workflow stops before
+the target pull or any production Compose command. Rerun the reviewed workflow
+to process the next batch. An unreachable plan fails without deleting
+anything. Every removal uses the exact digest with `--no-prune`; retention
+never prunes or deletes containers, networks, volumes, builder cache,
+deployment evidence, or application data. A retention failure does not roll
+back or misclassify the existing healthy deployment because promotion has not
+started.
+
+To inspect the plan from a trusted checkout, run the same CLI without
+`--apply`. Replace each placeholder, including the lowercase project slug used
+under `.local/state`:
+
+```bash
+cd "$HOME/<repository>/src"
+python3 -S -B -m agent.deployment_retention enforce \
+  --state-dir "$HOME/.local/state/<lowercase-project-slug>/deployment" \
+  --repository "<owner>/<repository>" \
+  --target-reference "ghcr.io/<lowercase-owner>/<lowercase-repository>@sha256:<64-lowercase-hex>"
+```
+
+Dry-run output contains image identities and keep/delete reasons, not
+production environment values. Do not add `--apply` until the plan and any
+reported ambiguity have been reviewed.
+
 ### Using GHCR Images
 
 Instead of building locally, you can run the image published by your

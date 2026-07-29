@@ -430,6 +430,46 @@ jobs:
           tests/test_deployment_promotion_runtime.py::test_real_docker_promotes_then_restores_exact_verified_baseline
           -q --tb=line --disable-warnings --show-capture=no
 
+  deployment-retention:
+    name: Validate bounded VM image retention
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUN_DEPLOYMENT_RETENTION_INTEGRATION: "1"
+      DEPLOYMENT_RETENTION_TEST_PREFIX: >-
+        adk-retention-${{ github.run_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Run bounded VM image-retention proof
+        env:
+          PYTEST_ADDOPTS: ""
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTEST_PLUGINS: ""
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          uv run --locked --no-sync pytest
+          --noconftest --confcutdir=tests
+          -o addopts= -p no:cacheprovider
+          tests/test_deployment_retention_runtime.py::test_real_docker_retention_reserves_one_exact_pull_slot
+          -q --tb=line --disable-warnings --show-capture=no
+
   trace-gateway:
     name: Validate trace-redaction gateway
     runs-on: ubuntu-latest

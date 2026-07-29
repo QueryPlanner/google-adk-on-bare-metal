@@ -75,6 +75,7 @@ jobs:
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            io.queryplanner.adk.repository=${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -227,7 +228,8 @@ jobs:
           for SOURCE_PATH in \
             scripts/deployment_bootstrap.sh \
             scripts/deployment_cleanup.sh \
-            src/agent/compose_env.py
+            src/agent/compose_env.py \
+            src/agent/deployment_retention.py
           do
             if [ ! -f "$SOURCE_PATH" ] || [ -L "$SOURCE_PATH" ]; then
               echo "ERROR: Deployment source file is unavailable."
@@ -485,6 +487,44 @@ jobs:
             printf '%s' "ghcr.io/${{ github.repository }}" \
               | tr '[:upper:]' '[:lower:]'
           )"
+          RETENTION_COMMAND="set -eu
+          PHYSICAL_HOME=\"\$(cd \"\$HOME\" && pwd -P)\"
+          exec flock -n \
+          \"\$PHYSICAL_HOME/$PROJECT_NAME.release-$DEPLOY_RUN_ID-$DEPLOY_RUN_ATTEMPT.lease/lock\" \
+          env -i \
+          \"HOME=\$PHYSICAL_HOME\" \
+          \"PATH=\$PATH\" \
+          LANG=C \
+          LC_ALL=C \
+          \"DOCKER_CONFIG=\${DOCKER_CONFIG-}\" \
+          \"DOCKER_HOST=\${DOCKER_HOST-}\" \
+          \"XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR-}\" \
+          python3 -I -S -B \
+          -c 'import runpy, sys; source = sys.argv.pop(1); sys.path.insert(0, source); runpy.run_module(\"agent.deployment_retention\", run_name=\"__main__\", alter_sys=True)' \
+          \"\$PHYSICAL_HOME/$PROJECT_NAME.release-$DEPLOY_RUN_ID-$DEPLOY_RUN_ATTEMPT/src\" \
+          enforce \
+          --state-dir \"\$PHYSICAL_HOME/.local/state/$PROJECT_SLUG/deployment\" \
+          --repository \"${{ github.repository }}\" \
+          --target-reference \"$IMAGE_REPOSITORY@$IMAGE_DIGEST\" \
+          --apply"
+          set +e
+          timeout --signal=TERM --kill-after=30s 10m \
+            ssh "${SSH_OPTIONS[@]}" "$SERVER_USER@$SERVER_HOST" \
+            "$RETENTION_COMMAND" < /dev/null
+          RETENTION_STATUS=$?
+          set -e
+          if [ "$RETENTION_STATUS" -ne 0 ]; then
+            case "$RETENTION_STATUS" in
+              124|137|143|255)
+                echo "ERROR: Retention transport ended ambiguously; checking the lease."
+                ;;
+              *)
+                echo "ERROR: Retention or its release lease did not complete."
+                ;;
+            esac
+            exit "$RETENTION_STATUS"
+          fi
+
           CONTROLLER_COMMAND="set -eu
           PHYSICAL_HOME=\"\$(cd \"\$HOME\" && pwd -P)\"
           exec env -i \
@@ -506,6 +546,7 @@ jobs:
           --expected-origin \"https://github.com/${{ github.repository }}\" \
           --compose-project \"adk-$PROJECT_SLUG\" \
           --compose-service agent \
+          --repository \"${{ github.repository }}\" \
           --source-revision \"$DEPLOY_SHA\" \
           --image-reference \"$IMAGE_REPOSITORY@$IMAGE_DIGEST\" \
           --adopt-existing \

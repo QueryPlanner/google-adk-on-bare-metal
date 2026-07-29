@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 import re
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
+from types import ModuleType
 from typing import Literal
 from unittest.mock import create_autospec, patch
 from urllib.error import URLError
@@ -35,6 +37,9 @@ from agent.deployment_state import DeploymentStateStore
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE_COMPOSE_PATH = REPOSITORY_ROOT / "compose.candidate.yaml"
 PROMOTION_MODULE_PATH = REPOSITORY_ROOT / "src" / "agent" / "deployment_promotion.py"
+PROMOTION_RUNTIME_DRIVER_PATH = (
+    REPOSITORY_ROOT / "tests" / "deployment_promotion_runtime_driver.py"
+)
 RUN_ENVIRONMENT_NAME = "RUN_DEPLOYMENT_PROMOTION_INTEGRATION"
 PREFIX_ENVIRONMENT_NAME = "DEPLOYMENT_PROMOTION_TEST_PREFIX"
 PREFIX_PATTERN = re.compile(r"adk-promotion-[a-z0-9][a-z0-9-]{0,23}\Z")
@@ -44,7 +49,8 @@ IMAGE_REFERENCE_PATTERN = re.compile(
     r"127\.0\.0\.1:[0-9]+/[a-z0-9-]+/agent@sha256:[0-9a-f]{64}\Z"
 )
 CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
-EXPECTED_ORIGIN = "https://github.com/QueryPlanner/google-adk-on-bare-metal"
+GITHUB_REPOSITORY = "QueryPlanner/google-adk-on-bare-metal"
+EXPECTED_ORIGIN = f"https://github.com/{GITHUB_REPOSITORY}"
 REGISTRY_IMAGE_REFERENCE = (
     "registry@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33"
 )
@@ -67,6 +73,21 @@ CANDIDATE_FAILURE_BOUND_SECONDS = 180
 OWNER_LABEL = "io.queryplanner.adk.promotion-test.owner"
 
 type DockerResourceKind = Literal["container", "image", "network", "volume"]
+
+
+def _load_runtime_driver() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "deployment_promotion_runtime_driver",
+        PROMOTION_RUNTIME_DRIVER_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("runtime driver could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PROMOTION_RUNTIME_DRIVER = _load_runtime_driver()
 
 
 @dataclass
@@ -144,6 +165,8 @@ USER root
 COPY promotion-wrapper.sh /usr/local/bin/promotion-wrapper
 RUN chmod 0755 /usr/local/bin/promotion-wrapper
 LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
+LABEL org.opencontainers.image.source="https://github.com/QueryPlanner/google-adk-on-bare-metal"
+LABEL io.queryplanner.adk.repository="QueryPlanner/google-adk-on-bare-metal"
 USER app
 ENTRYPOINT ["/usr/local/bin/promotion-wrapper"]
 # Docker clears an inherited CMD when a child image sets ENTRYPOINT.
@@ -1079,6 +1102,7 @@ def _push_exact_image(
     cleanup_targets: list[CleanupTarget],
     *,
     source_image_id: str,
+    source_tag: str,
     repository_tag: str,
 ) -> str:
     _assert_image_reference_absent(
@@ -1123,6 +1147,20 @@ def _push_exact_image(
     exact_reference = matching[0]
     assert IMAGE_REFERENCE_PATTERN.fullmatch(exact_reference)
     exact_cleanup.reference = exact_reference
+    _run(
+        [docker, "image", "rm", repository_tag],
+        environment=environment,
+        timeout=30,
+    )
+    _run(
+        [docker, "image", "rm", source_tag],
+        environment=environment,
+        timeout=30,
+    )
+    exact_document = _image_identity(docker, environment, exact_reference)
+    assert exact_document.get("Id") == source_image_id
+    assert exact_document.get("RepoDigests") == [exact_reference]
+    assert exact_document.get("RepoTags") == []
     return exact_reference
 
 
@@ -1239,13 +1277,19 @@ def _promotion_cli(
     project: str,
     revision: str,
     image_reference: str,
+    image_repository: str,
     adopt_existing: bool,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
-        "-m",
-        "agent.deployment_promotion",
+        str(PROMOTION_RUNTIME_DRIVER_PATH),
+        "--image-repository",
+        image_repository,
+        "--expected-origin",
+        EXPECTED_ORIGIN,
+        "--repository",
+        GITHUB_REPOSITORY,
         "promote",
         "--state-dir",
         str(state_directory),
@@ -1253,8 +1297,6 @@ def _promotion_cli(
         str(checkout),
         "--release-checkout",
         str(release_checkout),
-        "--expected-origin",
-        EXPECTED_ORIGIN,
         "--compose-project",
         project,
         "--compose-service",
@@ -1272,6 +1314,133 @@ def _promotion_cli(
         check=check,
         timeout=360,
     )
+
+
+def test_runtime_driver_receives_exact_test_identity_and_repository(
+    tmp_path: Path,
+) -> None:
+    """Keep the non-GHCR seam confined to the loopback-only test driver."""
+    image_repository = (
+        "127.0.0.1:49152/adk-promotion-123456789012345678901234-0123456789abcdef/agent"
+    )
+    image_reference = f"{image_repository}@sha256:{'a' * 64}"
+    completed = subprocess.CompletedProcess([], 0, stdout="PROMOTED\n", stderr="")
+    runner = create_autospec(_run, spec_set=True, return_value=completed)
+
+    with patch(f"{__name__}._run", runner):
+        result = _promotion_cli(
+            {},
+            state_directory=tmp_path / "state",
+            checkout=tmp_path / "checkout",
+            release_checkout=tmp_path / "release",
+            project="adk-promotion-proof-prod",
+            revision="b" * 40,
+            image_reference=image_reference,
+            image_repository=image_repository,
+            adopt_existing=True,
+        )
+
+    assert result is completed
+    command = runner.call_args.args[0]
+    assert command[:2] == [sys.executable, str(PROMOTION_RUNTIME_DRIVER_PATH)]
+    assert command[2:8] == [
+        "--image-repository",
+        image_repository,
+        "--expected-origin",
+        EXPECTED_ORIGIN,
+        "--repository",
+        GITHUB_REPOSITORY,
+    ]
+    assert command[8] == "promote"
+    assert "--adopt-existing" in command
+    assert "-m" not in command
+
+
+def test_runtime_driver_accepts_maximum_generated_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accept a long run ID plus the exact generated UUID suffix."""
+    image_repository = (
+        "127.0.0.1:49152/adk-promotion-123456789012345678901234-0123456789abcdef/agent"
+    )
+    promoter = create_autospec(
+        PROMOTION_RUNTIME_DRIVER.promotion_main,
+        spec_set=True,
+        return_value=0,
+    )
+    monkeypatch.setattr(
+        PROMOTION_RUNTIME_DRIVER,
+        "promotion_main",
+        promoter,
+    )
+
+    result = PROMOTION_RUNTIME_DRIVER.main(
+        [
+            "--image-repository",
+            image_repository,
+            "--expected-origin",
+            EXPECTED_ORIGIN,
+            "--repository",
+            GITHUB_REPOSITORY,
+            "promote",
+            "--state-dir",
+            "/private/test-state",
+        ]
+    )
+
+    assert result == 0
+    promoter.assert_called_once_with(
+        [
+            "promote",
+            "--expected-origin",
+            EXPECTED_ORIGIN,
+            "--repository",
+            GITHUB_REPOSITORY,
+            "--state-dir",
+            "/private/test-state",
+        ],
+        _image_repository=image_repository,
+    )
+
+
+@pytest.mark.parametrize(
+    "image_repository",
+    [
+        "registry.example/adk-promotion-proof-0123456789abcdef/agent",
+        "127.0.0.1:0/adk-promotion-proof-0123456789abcdef/agent",
+        "127.0.0.1:65536/adk-promotion-proof-0123456789abcdef/agent",
+        "127.0.0.1:49152/adk-promotion-proof/agent",
+    ],
+)
+def test_runtime_driver_rejects_nonisolated_repository(
+    monkeypatch: pytest.MonkeyPatch,
+    image_repository: str,
+) -> None:
+    """Reject any override outside the exact loopback fixture shape."""
+    promoter = create_autospec(
+        PROMOTION_RUNTIME_DRIVER.promotion_main,
+        spec_set=True,
+    )
+    monkeypatch.setattr(
+        PROMOTION_RUNTIME_DRIVER,
+        "promotion_main",
+        promoter,
+    )
+
+    with pytest.raises(SystemExit, match="isolated loopback registry"):
+        PROMOTION_RUNTIME_DRIVER.main(
+            [
+                "--image-repository",
+                image_repository,
+                "--expected-origin",
+                EXPECTED_ORIGIN,
+                "--repository",
+                GITHUB_REPOSITORY,
+                "promote",
+            ]
+        )
+
+    promoter.assert_not_called()
 
 
 def _container_document(
@@ -2332,15 +2501,22 @@ def test_real_docker_promotes_then_restores_exact_verified_baseline(
             base_environment,
             name=registry_name,
         )
+        image_repository = f"{registry_endpoint}/{repository_name}"
 
         references: dict[str, str] = {}
-        for phase in ("old", "good", "unhealthy", "failing"):
+        for phase, source_tag in (
+            ("old", old_tag),
+            ("good", good_tag),
+            ("unhealthy", unhealthy_tag),
+            ("failing", failing_tag),
+        ):
             references[phase] = _push_exact_image(
                 docker,
                 base_environment,
                 cleanup_targets,
                 source_image_id=release_images[phase],
-                repository_tag=(f"{registry_endpoint}/{repository_name}:{phase}"),
+                source_tag=source_tag,
+                repository_tag=f"{image_repository}:{phase}",
             )
         revisions = {
             "old": old_revision,
@@ -2349,16 +2525,24 @@ def test_real_docker_promotes_then_restores_exact_verified_baseline(
             "failing": failing_revision,
         }
         for phase, revision in revisions.items():
-            image_id, oci_revision, repo_digests = _release_image_identity(
-                _image_identity(
-                    docker,
-                    base_environment,
-                    references[phase],
-                )
+            image_document = _image_identity(
+                docker,
+                base_environment,
+                references[phase],
             )
+            image_id, oci_revision, repo_digests = _release_image_identity(
+                image_document
+            )
+            image_config = image_document.get("Config")
+            assert isinstance(image_config, dict)
+            labels = image_config.get("Labels")
+            assert isinstance(labels, dict)
             assert image_id == release_images[phase]
             assert oci_revision == revision
-            assert references[phase] in repo_digests
+            assert repo_digests == (references[phase],)
+            assert image_document.get("RepoTags") == []
+            assert labels["io.queryplanner.adk.repository"] == GITHUB_REPOSITORY
+            assert labels["org.opencontainers.image.source"] == EXPECTED_ORIGIN
         assert len(set(revisions.values())) == 4
         assert len(set(release_images.values())) == 4
         assert len(set(references.values())) == 4
@@ -2594,6 +2778,7 @@ def test_real_docker_promotes_then_restores_exact_verified_baseline(
             project=production_project,
             revision=good_revision,
             image_reference=references["good"],
+            image_repository=image_repository,
             adopt_existing=True,
         )
         _assert_safe_output(good_result)
@@ -2722,6 +2907,7 @@ def test_real_docker_promotes_then_restores_exact_verified_baseline(
             project=production_project,
             revision=unhealthy_revision,
             image_reference=references["unhealthy"],
+            image_repository=image_repository,
             adopt_existing=False,
             check=False,
         )
@@ -2868,6 +3054,7 @@ def test_real_docker_promotes_then_restores_exact_verified_baseline(
             project=production_project,
             revision=failing_revision,
             image_reference=references["failing"],
+            image_repository=image_repository,
             adopt_existing=False,
             check=False,
         )

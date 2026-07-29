@@ -39,9 +39,11 @@ TARGET_REVISION = "b" * 40
 OLD_IMAGE_ID = f"sha256:{'c' * 64}"
 TARGET_IMAGE_ID = f"sha256:{'d' * 64}"
 MANUAL_IMAGE_ID = f"sha256:{'9' * 64}"
-OLD_IMAGE = f"ghcr.io/queryplanner/agent@sha256:{'e' * 64}"
-TARGET_IMAGE = f"ghcr.io/queryplanner/agent@sha256:{'f' * 64}"
-MANUAL_IMAGE = f"ghcr.io/queryplanner/agent@sha256:{'8' * 64}"
+REPOSITORY = "QueryPlanner/google-adk-on-bare-metal"
+IMAGE_REPOSITORY = "ghcr.io/queryplanner/google-adk-on-bare-metal"
+OLD_IMAGE = f"{IMAGE_REPOSITORY}@sha256:{'e' * 64}"
+TARGET_IMAGE = f"{IMAGE_REPOSITORY}@sha256:{'f' * 64}"
+MANUAL_IMAGE = f"{IMAGE_REPOSITORY}@sha256:{'8' * 64}"
 OLD_CONTAINER = "1" * 64
 TARGET_CONTAINER = "2" * 64
 CANDIDATE_CONTAINER = "3" * 64
@@ -85,6 +87,30 @@ def _private(path: Path, payload: bytes) -> Path:
     return path
 
 
+def _retention_image(seed: str) -> dict[str, object]:
+    reference = f"{IMAGE_REPOSITORY}@sha256:{seed * 64}"
+    return {
+        "Id": f"sha256:{seed * 64}",
+        "RepoDigests": [reference],
+        "RepoTags": [],
+        "Config": {
+            "Labels": {
+                "io.queryplanner.adk.repository": REPOSITORY,
+                "org.opencontainers.image.revision": seed * 40,
+                "org.opencontainers.image.source": ORIGIN,
+            }
+        },
+    }
+
+
+def _file_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
 @dataclass
 class Host:
     """Stateful fake for only the Git and Docker process boundaries."""
@@ -110,6 +136,9 @@ class Host:
     log: list[tuple[str, ...]] = field(default_factory=list)
     pending_seen_before_mutation: bool = False
     lease_probe: Path | None = None
+    target_local: bool = False
+    target_repository_label: str = REPOSITORY
+    retention_images: dict[str, dict[str, object]] = field(default_factory=dict)
 
     def executable(self, name: str) -> str:
         return str(self.bin_dir / name)
@@ -198,21 +227,41 @@ class Host:
 
     def _image_document(self, selector: str) -> dict[str, object]:
         if selector in {TARGET_IMAGE, TARGET_IMAGE_ID}:
+            if not self.target_local:
+                raise KeyError(selector)
             return {
                 "Id": TARGET_IMAGE_ID,
                 "RepoDigests": [TARGET_IMAGE],
+                "RepoTags": [],
                 "Config": {
-                    "Labels": {"org.opencontainers.image.revision": TARGET_REVISION}
+                    "Labels": {
+                        "io.queryplanner.adk.repository": (
+                            self.target_repository_label
+                        ),
+                        "org.opencontainers.image.revision": TARGET_REVISION,
+                        "org.opencontainers.image.source": ORIGIN,
+                    }
                 },
             }
         if selector in {OLD_IMAGE, OLD_IMAGE_ID}:
             return {
                 "Id": OLD_IMAGE_ID,
                 "RepoDigests": [OLD_IMAGE],
+                "RepoTags": [],
                 "Config": {
-                    "Labels": {"org.opencontainers.image.revision": OLD_REVISION}
+                    "Labels": {
+                        "io.queryplanner.adk.repository": REPOSITORY,
+                        "org.opencontainers.image.revision": OLD_REVISION,
+                        "org.opencontainers.image.source": ORIGIN,
+                    }
                 },
             }
+        for document in self.retention_images.values():
+            repo_digests = document.get("RepoDigests")
+            if selector == document.get("Id") or (
+                isinstance(repo_digests, list) and selector in repo_digests
+            ):
+                return document
         raise AssertionError(selector)
 
     def _container_document(
@@ -289,12 +338,40 @@ class Host:
         environment: dict[str, str],
     ) -> subprocess.CompletedProcess[str]:
         tail = args[1:]
+        if tail == ["image", "ls", "--all", "--no-trunc", "--quiet"]:
+            image_ids = [OLD_IMAGE_ID, *sorted(self.retention_images)]
+            if self.target_local:
+                image_ids.append(TARGET_IMAGE_ID)
+            return self.completed(
+                args, stdout="".join(f"{item}\n" for item in image_ids)
+            )
         if tail[:2] == ["image", "pull"]:
+            self.target_local = True
             return self.completed(args, stdout=f"{tail[2]}\n")
         if tail[:2] == ["image", "inspect"]:
+            try:
+                document = self._image_document(tail[2])
+            except KeyError:
+                return self.completed(
+                    args,
+                    returncode=1,
+                    stdout="[]\n",
+                    stderr=(f"Error response from daemon: No such image: {tail[2]}\n"),
+                )
+            return self.completed(args, stdout=json.dumps([document]))
+        if tail == ["container", "ls", "--all", "--no-trunc", "--quiet"]:
+            container_ids: list[str] = []
+            if self.production_exists:
+                container_ids.append(
+                    TARGET_CONTAINER
+                    if self.production_image == TARGET_IMAGE
+                    else OLD_CONTAINER
+                )
+            if self.candidate_exists:
+                container_ids.append(CANDIDATE_CONTAINER)
             return self.completed(
                 args,
-                stdout=json.dumps([self._image_document(tail[2])]),
+                stdout="".join(f"{item}\n" for item in container_ids),
             )
         if tail[:2] == ["container", "ls"]:
             project_filter = next(
@@ -426,6 +503,7 @@ def setup(
         checkout=checkout,
         release_checkout=release,
         expected_origin=ORIGIN,
+        repository=REPOSITORY,
         compose_project=PROJECT,
         compose_service=SERVICE,
         source_revision=TARGET_REVISION,
@@ -461,6 +539,8 @@ def _argv(config: PromotionConfig) -> list[str]:
         str(config.release_checkout),
         "--expected-origin",
         config.expected_origin,
+        "--repository",
+        config.repository,
         "--compose-project",
         config.compose_project,
         "--compose-service",
@@ -496,6 +576,7 @@ def _pending(
     cutover_started: bool = True,
 ) -> None:
     _initialize(host, config)
+    host.target_local = True
     target_env = _private(
         config.state_dir.parent / "target-input.env",
         b'TARGET="yes"\n',
@@ -547,6 +628,7 @@ def _fresh_pending(
 ) -> None:
     host.production_exists = False
     host.volume_exists = False
+    host.target_local = True
     (host.checkout / ".env").unlink()
     target_env = _private(
         config.state_dir.parent / "fresh-target-input.env",
@@ -636,6 +718,74 @@ def test_candidate_failure_leaves_every_production_identity_untouched(
     assert DeploymentStateStore(config.state_dir).read_journal() == before_journal
     assert not config.state_dir.joinpath("pending.json").exists()
     assert not host.candidate_exists
+
+
+def test_capacity_race_blocks_before_pull_or_deployment_mutation(
+    setup: tuple[Host, PromotionConfig, dict[str, str]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    host, config, environment = setup
+    _initialize(host, config)
+    host.retention_images.update(
+        {f"sha256:{seed * 64}": _retention_image(seed) for seed in "0123456"}
+    )
+    state_before = _file_snapshot(config.state_dir)
+    environment_before = (host.checkout / ".env").read_bytes()
+    runtime_before = host._container_document(candidate=False)
+    production_revision_before = host.production_revision
+    commands_before = len(host.log)
+
+    assert main(_argv(config), environment) == 1
+
+    assert "image-retention admission failed" in capsys.readouterr().err
+    assert _file_snapshot(config.state_dir) == state_before
+    assert (host.checkout / ".env").read_bytes() == environment_before
+    assert host._container_document(candidate=False) == runtime_before
+    assert host.production_revision == production_revision_before
+    assert not host.candidate_exists
+    later = host.log[commands_before:]
+    assert any(command[1:3] == ("image", "ls") for command in later)
+    assert not any(
+        command[1:3]
+        in {
+            ("image", "pull"),
+            ("image", "rm"),
+            ("container", "rm"),
+        }
+        or "compose" in command
+        or "checkout" in command
+        for command in later
+    )
+
+
+def test_post_pull_retention_proof_rejects_unmanaged_target(
+    setup: tuple[Host, PromotionConfig, dict[str, str]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    host, config, environment = setup
+    _initialize(host, config)
+    host.target_repository_label = "Other/repository"
+    state_before = _file_snapshot(config.state_dir)
+    environment_before = (host.checkout / ".env").read_bytes()
+    runtime_before = host._container_document(candidate=False)
+    commands_before = len(host.log)
+
+    assert main(_argv(config), environment) == 1
+
+    assert "local target image is not exactly managed" in capsys.readouterr().err
+    assert host.target_local
+    assert _file_snapshot(config.state_dir) == state_before
+    assert (host.checkout / ".env").read_bytes() == environment_before
+    assert host._container_document(candidate=False) == runtime_before
+    assert not host.candidate_exists
+    later = host.log[commands_before:]
+    assert sum(command[1:3] == ("image", "pull") for command in later) == 1
+    assert not any(
+        command[1:3] in {("image", "rm"), ("container", "rm")}
+        or "compose" in command
+        or "checkout" in command
+        for command in later
+    )
 
 
 def test_post_cutover_failure_restores_and_records_rollback(
@@ -960,6 +1110,7 @@ def test_pending_fresh_install_is_aborted_and_requires_rerun(
     host, config, environment = setup
     host.production_exists = False
     host.volume_exists = False
+    host.target_local = True
     (host.checkout / ".env").unlink()
     target_env = _private(
         config.state_dir.parent / "fresh-target-input.env",
@@ -1279,6 +1430,31 @@ def test_cli_surface_and_fixed_environment_allowlist(
 
     assert tuple(SECRETS) == PRODUCTION_ENVIRONMENT_NAMES
     assert main(_argv(config), environment) == 0
+
+
+def test_internal_image_repository_override_is_not_a_cli_option(
+    setup: tuple[Host, PromotionConfig, dict[str, str]],
+) -> None:
+    """Exercise the test seam while keeping it absent from production argv."""
+    host, config, environment = setup
+    _initialize(host, config)
+    image_repository = f"ghcr.io/{config.repository.lower()}"
+
+    assert (
+        main(
+            _argv(config),
+            environment,
+            _image_repository=image_repository,
+        )
+        == 0
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [*_argv(config), "--image-repository", image_repository],
+            environment,
+        )
+    assert error.value.code == 2
 
 
 def test_cli_reads_exact_production_environment_from_bounded_stdin(
@@ -1610,10 +1786,23 @@ def test_explicit_adoption_happens_before_promotion(
     [
         ("state_dir", Path("relative"), "absolute normalized"),
         ("expected_origin", f"{ORIGIN}.git", "expected origin"),
+        ("repository", "invalid", "GitHub repository"),
+        ("repository", "Other/repository", "GitHub repository"),
+        ("image_repository", "invalid repository", "image repository identity"),
+        (
+            "image_repository",
+            "registry.example/other/agent",
+            "repository does not match",
+        ),
         ("compose_project", "UPPER", "Compose project"),
         ("compose_service", "bad.name", "Compose service"),
         ("source_revision", "a" * 39, "source revision"),
         ("image_reference", "agent:latest", "immutable digest"),
+        (
+            "image_reference",
+            f"ghcr.io/queryplanner/other@sha256:{'7' * 64}",
+            "repository does not match",
+        ),
     ],
 )
 def test_invalid_controller_inputs_fail_before_external_mutation(
@@ -1630,6 +1819,10 @@ def test_invalid_controller_inputs_fail_before_external_mutation(
         assert isinstance(value, str)
         if field == "expected_origin":
             changed = replace(config, expected_origin=value)
+        elif field == "repository":
+            changed = replace(config, repository=value)
+        elif field == "image_repository":
+            changed = replace(config, image_repository=value)
         elif field == "compose_project":
             changed = replace(config, compose_project=value)
         elif field == "compose_service":
