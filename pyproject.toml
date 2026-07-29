@@ -33,6 +33,7 @@ dependencies = [
 server = "agent.server:main"
 deployment-state = "agent.deployment_state_cli:main"
 deployment-promote = "agent.deployment_promotion:main"
+deployment-retention = "agent.deployment_retention:main"
 
 [dependency-groups]
 dev = [

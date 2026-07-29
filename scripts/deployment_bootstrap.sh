@@ -343,6 +343,7 @@ for TARGET_PATH in \
   src/agent/compose_env.py \
   src/agent/deployment_adoption.py \
   src/agent/deployment_promotion.py \
+  src/agent/deployment_retention.py \
   src/agent/deployment_state.py
 do
   TARGET_ENTRY="$(git_safe -C "$PROJECT_DIR" ls-tree "$DEPLOY_SHA" -- "$TARGET_PATH")"
@@ -431,6 +432,7 @@ for TARGET_PATH in \
   src/agent/compose_env.py \
   src/agent/deployment_adoption.py \
   src/agent/deployment_promotion.py \
+  src/agent/deployment_retention.py \
   src/agent/deployment_state.py
 do
   if [ ! -f "$RELEASE_DIR/$TARGET_PATH" ] \

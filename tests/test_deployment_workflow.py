@@ -167,6 +167,7 @@ def _git_harness(
         "src/agent/compose_env.py": "VALUE = 'compose'\n",
         "src/agent/deployment_adoption.py": "VALUE = 'adoption'\n",
         "src/agent/deployment_promotion.py": "VALUE = 'promotion'\n",
+        "src/agent/deployment_retention.py": "VALUE = 'retention'\n",
         "src/agent/deployment_state.py": "VALUE = 'state'\n",
     }
     for relative, content in tracked.items():
@@ -543,7 +544,7 @@ def test_openssh_transport_is_strict_direct_and_lease_gated() -> None:
     assert "CONTROLLER_FILE" not in script
     assert "REMOTE_CLEANUP_ALLOWED=0" not in controller
     assert "124|137|143|255" in script
-    assert script.count("checking the lease") == 2
+    assert script.count("checking the lease") == 3
     assert "timeout --signal=TERM --kill-after=30s 8m" in script
     assert "timeout --signal=TERM --kill-after=30s 30m" in script
     assert "timeout --signal=TERM --kill-after=15s 2m" in script
